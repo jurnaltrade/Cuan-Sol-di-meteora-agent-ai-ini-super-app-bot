@@ -695,7 +695,7 @@ function condensePool(p) {
     fee_window: round(p.fee),
     volume_window: round(p.volume),
     fee_active_tvl_ratio: p.fee_active_tvl_ratio != null ? fix(p.fee_active_tvl_ratio, 4) : null,
-    volatility: fix(p.volatility, 2),
+    volatility: fix(p.volatility, 4),
     volatility_timeframe: p.volatility_timeframe || VOLATILITY_TIMEFRAME,
 
 
