@@ -282,6 +282,100 @@ There is currently no empty-string disable path for HiveMind; blank values fall 
 
 ---
 
+## Autoresearch
+
+Autoresearch lets you run live experiments on a **separate wallet** with isolated state, logs, and lessons — without touching your production instance. Inspired by [Karpathy's autoresearch pattern](https://github.com/karpathy/autoresearch): fixed budget, one scoreboard, keep/discard after review.
+
+### How it works
+
+A second PM2 app (`meridian-autoresearch`) runs the same codebase with two extra env vars:
+
+| Var | Value |
+|---|---|
+| `MERIDIAN_PROFILE` | `autoresearch` |
+| `MERIDIAN_DATA_DIR` | `profiles/autoresearch` |
+
+This redirects all mutable files — `state.json`, `lessons.json`, `pool-memory.json`, logs, HiveMind cache — into `profiles/autoresearch/`. Production and autoresearch never share data.
+
+HiveMind publish mode is set to `experimental` in the profile config, so learning events are tagged with `{ profile, runId }` and kept separate from production agent data.
+
+Run results are appended to `research/runs/<runId>/results.jsonl` after each close:
+
+```json
+{"ts":"...","run_id":"run-001","net_sol":0.02,"fees_sol":0.005,"pnl_pct":4.1,"close_reason":"trailing_tp","oor_time_min":12}
+```
+
+### Setup
+
+**1. Generate a new wallet and fund it with ~2% of your live bankroll**
+
+```bash
+solana-keygen new --outfile autoresearch-wallet.json
+```
+
+**2. Set the wallet key in the profile config**
+
+```bash
+cp profiles/autoresearch/user-config.json profiles/autoresearch/user-config.json.bak
+# Edit profiles/autoresearch/user-config.json and set "walletKey" to your new wallet's private key
+```
+
+**3. Boot check — verify isolation before trading**
+
+```bash
+# Set maxPositions=0 in profiles/autoresearch/user-config.json first
+MERIDIAN_DATA_DIR=profiles/autoresearch MERIDIAN_PROFILE=autoresearch node index.js
+```
+
+Startup guard will abort if:
+- `MERIDIAN_DATA_DIR` is unset or points to project root
+- `WALLET_PRIVATE_KEY` is missing
+- Autoresearch wallet key matches production wallet key
+
+**4. Switch to live and start via PM2**
+
+```bash
+# Set maxPositions=1 in profiles/autoresearch/user-config.json
+pm2 start ecosystem.config.cjs --only meridian-autoresearch
+pm2 logs meridian-autoresearch
+```
+
+Production keeps running untouched on its own PM2 app.
+
+### Profile config (`profiles/autoresearch/user-config.json`)
+
+Key fields (all others inherit the same defaults as production):
+
+| Field | Default | Description |
+|---|---|---|
+| `walletKey` | — | **Required.** Must differ from production wallet |
+| `maxPositions` | `1` | Keep at 1 for a clean experiment surface |
+| `deployAmountSol` | `0.1` | Tiny sizing — 2–3% of live bankroll |
+| `minDeployAmountSol` | `0.05` | Floor for position sizing formula |
+| `stopLossPct` | `-30` | Tighter stop-loss than production default |
+| `autoresearch.maxWalletSol` | `0.5` | Blocks new deploys if balance exceeds this |
+| `autoresearch.dailyLossLimitSol` | `0.1` | Blocks new deploys if today's losses hit this |
+| `autoresearch.runId` | `run-001` | Links closes to a specific experiment |
+| `hiveMindPublishMode` | `experimental` | Tags HiveMind data; never auto-imports to production |
+
+### Experiment runs
+
+Each run is defined in `research/runs/<runId>/config.json`:
+
+```json
+{
+  "runId": "run-001",
+  "targetBudgetSol": 0.5,
+  "durationHours": 72,
+  "maxClosedPositions": 10,
+  "notes": "Baseline — default screener settings"
+}
+```
+
+Run for 72 hours or 10 closed positions (whichever comes first). Promote a config to production only if the run is net-positive in SOL after fees, no safety breaches, and drawdown stayed within limits.
+
+---
+
 ## Disclaimer
 
 This software is provided as-is, with no warranty. Running an autonomous trading agent carries real financial risk — you can lose funds. Always start with `npm run dev` (dry run) to verify behavior before going live. Never deploy more capital than you can afford to lose. This is not financial advice.
