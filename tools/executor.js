@@ -22,6 +22,7 @@ import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsO
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
 import { config, reloadScreeningThresholds, MIN_SAFE_BINS_BELOW } from "../config.js";
 import { getRecentDecisions } from "../decision-log.js";
+import { acquireActionLock, checkDeployBudget, recordClose as recordSafetyClose, recordDeploy as recordSafetyDeploy, releaseActionLock } from "../safety.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -391,6 +392,10 @@ const toolMap = {
       // risk
       maxPositions: ["risk", "maxPositions"],
       maxDeployAmount: ["risk", "maxDeployAmount"],
+      maxDailyDeploySol: ["risk", "maxDailyDeploySol"],
+      maxDailyLossUsd: ["risk", "maxDailyLossUsd"],
+      maxConsecutiveLosses: ["risk", "maxConsecutiveLosses"],
+      maxActionLockAgeMin: ["risk", "maxActionLockAgeMin"],
       // schedule
       managementIntervalMin: ["schedule", "managementIntervalMin"],
       screeningIntervalMin: ["schedule", "screeningIntervalMin"],
@@ -556,6 +561,7 @@ const PROTECTED_TOOLS = new Set([
  */
 export async function executeTool(name, args) {
   const startTime = Date.now();
+  let locked = false;
 
   // Strip model artifacts like "<|channel|>commentary" appended to tool names
   name = name.replace(/<.*$/, "").trim();
@@ -570,9 +576,21 @@ export async function executeTool(name, args) {
 
   // ─── Pre-execution safety checks ──────────
   if (PROTECTED_TOOLS.has(name)) {
+    if (WRITE_TOOLS.has(name)) {
+      const lock = acquireActionLock(name, args);
+      if (!lock.pass) {
+        log("safety_block", `${name} blocked: ${lock.reason}`);
+        return { blocked: true, reason: lock.reason };
+      }
+      locked = true;
+    }
     const safetyCheck = await runSafetyChecks(name, args);
     if (!safetyCheck.pass) {
       log("safety_block", `${name} blocked: ${safetyCheck.reason}`);
+      if (locked) {
+        releaseActionLock(name);
+        locked = false;
+      }
       return {
         blocked: true,
         reason: safetyCheck.reason,
@@ -598,8 +616,10 @@ export async function executeTool(name, args) {
       if (name === "swap_token" && result.tx) {
         notifySwap({ inputSymbol: args.input_mint?.slice(0, 8), outputSymbol: args.output_mint === "So11111111111111111111111111111111111111112" || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8), amountIn: result.amount_in, amountOut: result.amount_out, tx: result.tx }).catch(() => {});
       } else if (name === "deploy_position") {
+        recordSafetyDeploy(result, args);
         notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
       } else if (name === "close_position") {
+        recordSafetyClose(result);
         notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0 }).catch(() => {});
         // Note low-yield closes in pool memory so screener avoids redeploying
         if (args.reason && args.reason.toLowerCase().includes("yield")) {
@@ -654,6 +674,8 @@ export async function executeTool(name, args) {
       error: error.message,
       tool: name,
     };
+  } finally {
+    if (locked) releaseActionLock(name);
   }
 }
 
@@ -787,6 +809,11 @@ async function runSafetyChecks(name, args) {
           pass: false,
           reason: `SOL amount ${amountY} exceeds maximum allowed per position (${config.risk.maxDeployAmount}).`,
         };
+      }
+
+      const budgetCheck = checkDeployBudget(amountY);
+      if (!budgetCheck.pass) {
+        return budgetCheck;
       }
 
       // Check SOL balance

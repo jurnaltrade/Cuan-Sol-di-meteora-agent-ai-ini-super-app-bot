@@ -38,6 +38,7 @@ if (u.llmModel)  process.env.LLM_MODEL          ||= u.llmModel;
 if (u.llmBaseUrl) process.env.LLM_BASE_URL      ||= u.llmBaseUrl;
 if (u.llmApiKey)  process.env.LLM_API_KEY       ||= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
+if (u.dryRun === undefined && process.env.DRY_RUN === undefined) process.env.DRY_RUN = "true";
 if (u.publicApiKey) process.env.PUBLIC_API_KEY ||= u.publicApiKey;
 if (u.agentMeridianApiUrl) process.env.AGENT_MERIDIAN_API_URL ||= u.agentMeridianApiUrl;
 
@@ -57,6 +58,10 @@ export const config = {
   risk: {
     maxPositions:    u.maxPositions    ?? 3,
     maxDeployAmount: u.maxDeployAmount ?? 50,
+    maxDailyDeploySol: u.maxDailyDeploySol ?? 1.5,
+    maxDailyLossUsd: u.maxDailyLossUsd ?? 100,
+    maxConsecutiveLosses: u.maxConsecutiveLosses ?? 3,
+    maxActionLockAgeMin: u.maxActionLockAgeMin ?? 20,
   },
 
   // ─── Pool Screening Thresholds ───────────

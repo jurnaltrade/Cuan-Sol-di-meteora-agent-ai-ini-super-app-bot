@@ -10,6 +10,10 @@
   "maxPositions": 3,
   "minSolToOpen": 0.55,
   "maxDeployAmount": 50,
+  "maxDailyDeploySol": 1.5,
+  "maxDailyLossUsd": 100,
+  "maxConsecutiveLosses": 3,
+  "maxActionLockAgeMin": 20,
   "gasReserve": 0.2,
   "positionSizePct": 0.35,
 

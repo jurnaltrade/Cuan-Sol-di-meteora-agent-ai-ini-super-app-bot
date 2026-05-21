@@ -34,6 +34,7 @@ import { stageSignals } from "./signal-tracker.js";
 import { getWeightsSummary } from "./signal-weights.js";
 import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
+import { formatSafetyStatus, isPaused, setPaused } from "./safety.js";
 
 const entrypointPath = process.env.pm_exec_path || process.argv[1];
 const isMain = entrypointPath
@@ -377,6 +378,12 @@ After executing, write a brief one-line result per position.
 }
 
 export async function runScreeningCycle({ silent = false } = {}) {
+  if (isPaused()) {
+    const screenReport = "Screening skipped — agent is paused. Use /resume to re-enable autonomous deploys.";
+    log("cron", screenReport);
+    if (!silent && telegramEnabled()) sendMessage(`🔍 Screening Cycle\n\n${screenReport}`).catch(() => {});
+    return screenReport;
+  }
   if (_screeningBusy) {
     log("cron", "Screening skipped — previous cycle still running");
     return null;
@@ -727,6 +734,10 @@ IMPORTANT:
 
 export function startCronJobs() {
   stopCronJobs(); // stop any running tasks before (re)starting
+  if (isPaused()) {
+    log("cron", "Autonomous cycles not started — agent is paused. Use /resume to start again.");
+    return;
+  }
 
   const mgmtTask = cron.schedule(`*/${Math.max(1, config.schedule.managementIntervalMin)} * * * *`, async () => {
     if (_managementBusy) return;
@@ -983,6 +994,7 @@ function formatWalletStatus(wallet, positions) {
     `Open positions: ${positions.total_positions}/${config.risk.maxPositions}`,
     `Next deploy amount: ${deployAmount} SOL`,
     `Dry run: ${process.env.DRY_RUN === "true" ? "yes" : "no"}`,
+    `Autonomous cycles: ${isPaused() ? "paused" : "enabled"}`,
     `HiveMind: ${hive}`,
   ].join("\n");
 }
@@ -993,6 +1005,7 @@ function formatConfigSnapshot() {
     "",
     `Strategy: ${config.strategy.strategy} | binsBelow: ${config.strategy.minBinsBelow}-${config.strategy.maxBinsBelow} | default ${config.strategy.defaultBinsBelow}`,
     `Deploy: ${config.management.deployAmountSol} SOL | gasReserve: ${config.management.gasReserve} | maxPositions: ${config.risk.maxPositions}`,
+    `Daily caps: deploy ${config.risk.maxDailyDeploySol} SOL | realized loss $${config.risk.maxDailyLossUsd} | loss streak ${config.risk.maxConsecutiveLosses}`,
     `Stop loss: ${config.management.stopLossPct}% | take profit: ${config.management.takeProfitPct}%`,
     `Trailing: ${config.management.trailingTakeProfit ? "on" : "off"} | trigger ${config.management.trailingTriggerPct}% | drop ${config.management.trailingDropPct}%`,
     `OOR: ${config.management.outOfRangeWaitMinutes}m | cooldown ${config.management.oorCooldownTriggerCount}x / ${config.management.oorCooldownHours}h`,
@@ -1032,6 +1045,10 @@ function settingValue(key) {
     gasReserve: config.management.gasReserve,
     maxPositions: config.risk.maxPositions,
     maxDeployAmount: config.risk.maxDeployAmount,
+    maxDailyDeploySol: config.risk.maxDailyDeploySol,
+    maxDailyLossUsd: config.risk.maxDailyLossUsd,
+    maxConsecutiveLosses: config.risk.maxConsecutiveLosses,
+    maxActionLockAgeMin: config.risk.maxActionLockAgeMin,
     takeProfitPct: config.management.takeProfitPct,
     stopLossPct: config.management.stopLossPct,
     trailingTriggerPct: config.management.trailingTriggerPct,
@@ -1109,6 +1126,9 @@ function renderSettingsMenu(page = "main") {
       stepButtons("gasReserve", "Gas", 0.05),
       stepButtons("maxPositions", "Max pos", 1, { digits: 0 }),
       stepButtons("maxDeployAmount", "Max SOL", 1, { digits: 0 }),
+      stepButtons("maxDailyDeploySol", "Daily SOL", 0.25, { digits: 2 }),
+      stepButtons("maxDailyLossUsd", "Daily loss $", 25, { digits: 0 }),
+      stepButtons("maxConsecutiveLosses", "Loss streak", 1, { digits: 0 }),
       stepButtons("takeProfitPct", "TP %", 1, { digits: 0 }),
       stepButtons("stopLossPct", "SL %", 5, { digits: 0 }),
       [toggleButton("trailingTakeProfit", "Trailing TP")],
@@ -1231,8 +1251,9 @@ async function applySettingsMenuCallback(msg) {
     if (key === "repeatDeployCooldownTriggerCount") value = Math.max(1, Math.round(value));
     if (key === "repeatDeployCooldownHours") value = Math.max(0, Math.round(value));
     if (key === "repeatDeployCooldownMinFeeEarnedPct") value = Math.max(0, value);
+    if (key === "maxConsecutiveLosses") value = Math.max(1, Math.round(value));
     if (["minBinsBelow", "maxBinsBelow", "defaultBinsBelow"].includes(key)) value = Math.max(35, Math.round(value));
-    if (["deployAmountSol", "gasReserve", "maxDeployAmount"].includes(key)) value = Math.max(0, value);
+    if (["deployAmountSol", "gasReserve", "maxDeployAmount", "maxDailyDeploySol", "maxDailyLossUsd"].includes(key)) value = Math.max(0, value);
   } else if (action === "set") {
     value = normalizeMenuValue(key, parts.slice(3).join(":"));
   } else {
@@ -1270,6 +1291,7 @@ function formatHelpText() {
     "/closeall — close all open positions",
     "/set <n> <note> — set note/instruction on position",
     "/config — show important runtime config",
+    "/safety — show pause state, daily caps, and runtime lock",
     "/settings — button menu for common config",
     "/setcfg <key> <value> — update persisted config",
     "/screen — refresh deterministic candidate list",
@@ -1438,6 +1460,11 @@ async function telegramHandler(msg) {
     return;
   }
 
+  if (text === "/safety") {
+    await sendMessage(formatSafetyStatus()).catch(() => {});
+    return;
+  }
+
   if (text === "/positions") {
     try {
       const { positions, total_positions } = await getMyPositions({ force: true });
@@ -1589,13 +1616,16 @@ async function telegramHandler(msg) {
   }
 
   if (text === "/pause") {
+    setPaused(true, "Telegram /pause");
     stopCronJobs();
     cronStarted = false;
-    await sendMessage("⏸ Paused autonomous cycles. Telegram control still works. Use /resume to start again.").catch(() => {});
+    await sendMessage("⏸ Paused autonomous cycles and blocked new deploys. Telegram control still works. Use /resume to start again.").catch(() => {});
     return;
   }
 
   if (text === "/resume") {
+    setPaused(false);
+    cronStarted = false;
     if (!cronStarted) {
       cronStarted = true;
       timers.managementLastRun = Date.now();
@@ -1726,6 +1756,10 @@ if (isMain && isTTY) {
 
   function launchCron() {
     if (!cronStarted) {
+      if (isPaused()) {
+        console.log("Autonomous cycles are paused. Use /resume to start them.\n");
+        return;
+      }
       cronStarted = true;
       // Seed timers so countdown starts from now
       timers.managementLastRun = Date.now();
@@ -1801,6 +1835,9 @@ Commands:
   /learn         Study top LPers from the best current pool and save lessons
   /learn <addr>  Study top LPers from a specific pool address
   /thresholds    Show current screening thresholds + performance stats
+  /safety        Show pause state, daily caps, and runtime lock
+  /pause         Stop autonomous cycles and block new deploys
+  /resume        Resume autonomous cycles
   /evolve        Manually trigger threshold evolution from performance data
   /stop          Shut down
 `);
@@ -1867,6 +1904,29 @@ Commands:
         }
         console.log();
       });
+      return;
+    }
+
+    if (input === "/safety") {
+      console.log(`\n${formatSafetyStatus()}\n`);
+      rl.prompt();
+      return;
+    }
+
+    if (input === "/pause") {
+      setPaused(true, "TTY /pause");
+      stopCronJobs();
+      cronStarted = false;
+      console.log("\nPaused autonomous cycles and blocked new deploys. Use /resume to start again.\n");
+      rl.prompt();
+      return;
+    }
+
+    if (input === "/resume") {
+      setPaused(false);
+      cronStarted = false;
+      launchCron();
+      rl.prompt();
       return;
     }
 
