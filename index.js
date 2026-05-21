@@ -34,7 +34,8 @@ import { stageSignals } from "./signal-tracker.js";
 import { getWeightsSummary } from "./signal-weights.js";
 import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
-import { formatSafetyStatus, isPaused, setPaused } from "./safety.js";
+import { formatSafetyStatus, getSafetyState, isPaused, setPaused } from "./safety.js";
+import { computePositionSize } from "./risk-policy.js";
 
 const entrypointPath = process.env.pm_exec_path || process.argv[1];
 const isMain = entrypointPath
@@ -438,7 +439,8 @@ export async function runScreeningCycle({ silent = false } = {}) {
     // Reuse pre-fetched balance — no extra RPC call needed
     const currentBalance = preBalance;
     const deployAmount = computeDeployAmount(currentBalance.sol);
-    log("cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL)`);
+    const safetyState = getSafetyState();
+    log("cron", `Computed base deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL, loss streak: ${safetyState.consecutiveLosses})`);
 
     // Load active strategy
     const activeStrategy = getActiveStrategy();
@@ -555,6 +557,8 @@ export async function runScreeningCycle({ silent = false } = {}) {
       const priceChange = ti?.stats_1h?.price_change;
       const netBuyers = ti?.stats_1h?.net_buyers;
       const activeBin = activeBinResults[i]?.status === "fulfilled" ? activeBinResults[i].value?.binId : null;
+      const candidateDeployAmount = computePositionSize(deployAmount, pool.entry_score, safetyState.consecutiveLosses);
+      pool.recommended_deploy_amount_sol = candidateDeployAmount;
 
       // OKX signals
       const okxParts = [
@@ -582,6 +586,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
       const block = [
         `POOL: ${pool.name} (${pool.pool})`,
         `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
+        `  entry: score=${pool.entry_score ?? "?"}/100, band=${pool.entry_band ?? "?"}, max_amount_y=${candidateDeployAmount} SOL${pool.entry_penalties?.length ? `, penalties=${pool.entry_penalties.join("; ")}` : ""}`,
         `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
         pvpLine,
         okxParts ? `  okx: ${okxParts}` : okxUnavailable ? `  okx: unavailable` : null,
@@ -620,7 +625,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const { content } = await agentLoop(`
 SCREENING CYCLE
 ${strategyBlock}
-Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
+Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Base deploy: ${deployAmount} SOL | loss streak: ${safetyState.consecutiveLosses}
 
 PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}
@@ -629,6 +634,7 @@ STEPS:
 1. Decide if any candidate is actually worth deploying. One surviving candidate is not automatically good enough.
 2. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
 3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+   Use that candidate's entry max_amount_y exactly as amount_y. Never exceed max_amount_y.
    bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*(${config.strategy.maxBinsBelow - config.strategy.minBinsBelow})) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
    pass deploy_position.volatility = the candidate volatility value.
    For single-side SOL deploys, do not invent upside:
@@ -992,7 +998,8 @@ function formatWalletStatus(wallet, positions) {
     `Wallet: ${wallet.sol} SOL ($${wallet.sol_usd})`,
     `SOL price: $${wallet.sol_price}`,
     `Open positions: ${positions.total_positions}/${config.risk.maxPositions}`,
-    `Next deploy amount: ${deployAmount} SOL`,
+    `Risk mode: ${config.risk.riskMode}`,
+    `Next base deploy amount: ${deployAmount} SOL`,
     `Dry run: ${process.env.DRY_RUN === "true" ? "yes" : "no"}`,
     `Autonomous cycles: ${isPaused() ? "paused" : "enabled"}`,
     `HiveMind: ${hive}`,
@@ -1004,8 +1011,10 @@ function formatConfigSnapshot() {
     "Config snapshot",
     "",
     `Strategy: ${config.strategy.strategy} | binsBelow: ${config.strategy.minBinsBelow}-${config.strategy.maxBinsBelow} | default ${config.strategy.defaultBinsBelow}`,
+    `Risk mode: ${config.risk.riskMode} | entry ${config.risk.minEntryScore ?? "mode default"} | size bands ${config.risk.normalSizeScore ?? "default"}/${config.risk.maxSizeScore ?? "default"}`,
     `Deploy: ${config.management.deployAmountSol} SOL | gasReserve: ${config.management.gasReserve} | maxPositions: ${config.risk.maxPositions}`,
     `Daily caps: deploy ${config.risk.maxDailyDeploySol} SOL | realized loss $${config.risk.maxDailyLossUsd} | loss streak ${config.risk.maxConsecutiveLosses}`,
+    `Screen quality: organic ${config.screening.minOrganic}/${config.screening.minQuoteOrganic} | fees ${config.screening.minTokenFeesSol} SOL | top10≤${config.screening.maxTop10Pct}% bots≤${config.screening.maxBotHoldersPct}% bundle≤${config.screening.maxBundlePct}%`,
     `Stop loss: ${config.management.stopLossPct}% | take profit: ${config.management.takeProfitPct}%`,
     `Trailing: ${config.management.trailingTakeProfit ? "on" : "off"} | trigger ${config.management.trailingTriggerPct}% | drop ${config.management.trailingDropPct}%`,
     `OOR: ${config.management.outOfRangeWaitMinutes}m | cooldown ${config.management.oorCooldownTriggerCount}x / ${config.management.oorCooldownHours}h`,
@@ -1032,6 +1041,7 @@ function parseConfigValue(raw) {
 function settingValue(key) {
   const values = {
     solMode: config.management.solMode,
+    riskMode: config.risk.riskMode,
     lpAgentRelayEnabled: config.api.lpAgentRelayEnabled,
     chartIndicatorsEnabled: config.indicators.enabled,
     trailingTakeProfit: config.management.trailingTakeProfit,
@@ -1049,6 +1059,10 @@ function settingValue(key) {
     maxDailyLossUsd: config.risk.maxDailyLossUsd,
     maxConsecutiveLosses: config.risk.maxConsecutiveLosses,
     maxActionLockAgeMin: config.risk.maxActionLockAgeMin,
+    minEntryScore: config.risk.minEntryScore,
+    normalSizeScore: config.risk.normalSizeScore,
+    maxSizeScore: config.risk.maxSizeScore,
+    lossCooldownHours: config.risk.lossCooldownHours,
     takeProfitPct: config.management.takeProfitPct,
     stopLossPct: config.management.stopLossPct,
     trailingTriggerPct: config.management.trailingTriggerPct,
@@ -1129,6 +1143,10 @@ function renderSettingsMenu(page = "main") {
       stepButtons("maxDailyDeploySol", "Daily SOL", 0.25, { digits: 2 }),
       stepButtons("maxDailyLossUsd", "Daily loss $", 25, { digits: 0 }),
       stepButtons("maxConsecutiveLosses", "Loss streak", 1, { digits: 0 }),
+      stepButtons("minEntryScore", "Entry score", 1, { digits: 0 }),
+      stepButtons("normalSizeScore", "Normal score", 1, { digits: 0 }),
+      stepButtons("maxSizeScore", "Max score", 1, { digits: 0 }),
+      stepButtons("lossCooldownHours", "Loss cooldown", 1, { digits: 0 }),
       stepButtons("takeProfitPct", "TP %", 1, { digits: 0 }),
       stepButtons("stopLossPct", "SL %", 5, { digits: 0 }),
       [toggleButton("trailingTakeProfit", "Trailing TP")],
@@ -1252,6 +1270,8 @@ async function applySettingsMenuCallback(msg) {
     if (key === "repeatDeployCooldownHours") value = Math.max(0, Math.round(value));
     if (key === "repeatDeployCooldownMinFeeEarnedPct") value = Math.max(0, value);
     if (key === "maxConsecutiveLosses") value = Math.max(1, Math.round(value));
+    if (["minEntryScore", "normalSizeScore", "maxSizeScore"].includes(key)) value = Math.max(0, Math.min(100, Math.round(value)));
+    if (key === "lossCooldownHours") value = Math.max(0, Math.round(value));
     if (["minBinsBelow", "maxBinsBelow", "defaultBinsBelow"].includes(key)) value = Math.max(35, Math.round(value));
     if (["deployAmountSol", "gasReserve", "maxDeployAmount", "maxDailyDeploySol", "maxDailyLossUsd"].includes(key)) value = Math.max(0, value);
   } else if (action === "set") {
@@ -1357,7 +1377,8 @@ async function deployLatestCandidate(index) {
       throw new Error(`NO DEPLOY: only cached candidate ${candidate.name} is not worth deploying — ${skipReason}`);
     }
   }
-  const deployAmount = computeDeployAmount((await getWalletBalances()).sol);
+  const baseDeployAmount = computeDeployAmount((await getWalletBalances()).sol);
+  const deployAmount = computePositionSize(baseDeployAmount, candidate.entry_score, getSafetyState().consecutiveLosses);
   const binsBelow = computeBinsBelow(candidate.volatility);
   const result = await executeTool("deploy_position", {
     pool_address: candidate.pool,

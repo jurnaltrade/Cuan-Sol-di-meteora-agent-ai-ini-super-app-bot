@@ -43,6 +43,27 @@ if (u.publicApiKey) process.env.PUBLIC_API_KEY ||= u.publicApiKey;
 if (u.agentMeridianApiUrl) process.env.AGENT_MERIDIAN_API_URL ||= u.agentMeridianApiUrl;
 
 const indicatorUserConfig = u.chartIndicators ?? {};
+const riskMode = ["stable", "balanced", "aggressive"].includes(String(u.riskMode || "stable").toLowerCase())
+  ? String(u.riskMode || "stable").toLowerCase()
+  : "stable";
+const stableDefaults = riskMode === "stable"
+  ? {
+      maxPositions: 1,
+      maxDailyDeploySol: 0.3,
+      maxDailyLossUsd: 25,
+      maxConsecutiveLosses: 2,
+      minOrganic: 75,
+      minQuoteOrganic: 70,
+      minTokenFeesSol: 50,
+      maxTop10Pct: 45,
+      maxBotHoldersPct: 20,
+      maxBundlePct: 20,
+      stopLossPct: -25,
+      outOfRangeWaitMinutes: 15,
+      minAgeBeforeYieldCheck: 30,
+      deployAmountSol: 0.1,
+    }
+  : {};
 
 function nonEmptyString(...values) {
   for (const value of values) {
@@ -56,12 +77,22 @@ function nonEmptyString(...values) {
 export const config = {
   // ─── Risk Limits ─────────────────────────
   risk: {
-    maxPositions:    u.maxPositions    ?? 3,
+    riskMode,
+    maxPositions:    u.maxPositions    ?? stableDefaults.maxPositions ?? 3,
     maxDeployAmount: u.maxDeployAmount ?? 50,
-    maxDailyDeploySol: u.maxDailyDeploySol ?? 1.5,
-    maxDailyLossUsd: u.maxDailyLossUsd ?? 100,
-    maxConsecutiveLosses: u.maxConsecutiveLosses ?? 3,
+    maxDailyDeploySol: u.maxDailyDeploySol ?? stableDefaults.maxDailyDeploySol ?? 1.5,
+    maxDailyLossUsd: u.maxDailyLossUsd ?? stableDefaults.maxDailyLossUsd ?? 100,
+    maxConsecutiveLosses: u.maxConsecutiveLosses ?? stableDefaults.maxConsecutiveLosses ?? 3,
     maxActionLockAgeMin: u.maxActionLockAgeMin ?? 20,
+    minEntryScore: u.minEntryScore ?? null,
+    watchScore: u.watchScore ?? null,
+    normalSizeScore: u.normalSizeScore ?? null,
+    maxSizeScore: u.maxSizeScore ?? null,
+    minSizeMultiplier: u.minSizeMultiplier ?? null,
+    normalSizeMultiplier: u.normalSizeMultiplier ?? null,
+    maxSizeMultiplier: u.maxSizeMultiplier ?? null,
+    lossSizeMultiplier: u.lossSizeMultiplier ?? null,
+    lossCooldownHours: u.lossCooldownHours ?? (riskMode === "stable" ? 12 : 6),
   },
 
   // ─── Pool Screening Thresholds ───────────
@@ -71,8 +102,8 @@ export const config = {
     minTvl:            u.minTvl            ?? 10_000,
     maxTvl:            u.maxTvl !== undefined ? u.maxTvl : 150_000,
     minVolume:         u.minVolume         ?? 500,
-    minOrganic:        u.minOrganic        ?? 60,
-    minQuoteOrganic:   u.minQuoteOrganic   ?? 60,
+    minOrganic:        u.minOrganic        ?? stableDefaults.minOrganic ?? 60,
+    minQuoteOrganic:   u.minQuoteOrganic   ?? stableDefaults.minQuoteOrganic ?? 60,
     minHolders:        u.minHolders        ?? 500,
     minMcap:           u.minMcap           ?? 150_000,
     maxMcap:           u.maxMcap           ?? 10_000_000,
@@ -80,14 +111,14 @@ export const config = {
     maxBinStep:        u.maxBinStep        ?? 125,
     timeframe:         u.timeframe         ?? "5m",
     category:          u.category          ?? "trending",
-    minTokenFeesSol:   u.minTokenFeesSol   ?? 30,  // global fees paid (priority+jito tips). below = bundled/scam
+    minTokenFeesSol:   u.minTokenFeesSol   ?? stableDefaults.minTokenFeesSol ?? 30,  // global fees paid (priority+jito tips). below = bundled/scam
     useDiscordSignals: u.useDiscordSignals ?? false,
     discordSignalMode: u.discordSignalMode ?? "merge", // merge | only
     avoidPvpSymbols:   u.avoidPvpSymbols   ?? true, // avoid exact-symbol rivals with real active pools
     blockPvpSymbols:   u.blockPvpSymbols   ?? false, // hard-filter PVP rivals before the LLM sees them
-    maxBundlePct:      u.maxBundlePct      ?? 30,  // max bundle holding % (OKX advanced-info)
-    maxBotHoldersPct:  u.maxBotHoldersPct  ?? 30,  // max bot holder addresses % (Jupiter audit)
-    maxTop10Pct:       u.maxTop10Pct       ?? 60,  // max top 10 holders concentration
+    maxBundlePct:      u.maxBundlePct      ?? stableDefaults.maxBundlePct ?? 30,  // max bundle holding % (OKX advanced-info)
+    maxBotHoldersPct:  u.maxBotHoldersPct  ?? stableDefaults.maxBotHoldersPct ?? 30,  // max bot holder addresses % (Jupiter audit)
+    maxTop10Pct:       u.maxTop10Pct       ?? stableDefaults.maxTop10Pct ?? 60,  // max top 10 holders concentration
     allowedLaunchpads: u.allowedLaunchpads ?? [],  // allow-list launchpads, [] = no allow-list
     blockedLaunchpads:  u.blockedLaunchpads  ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
     minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
@@ -100,7 +131,7 @@ export const config = {
     minClaimAmount:        u.minClaimAmount        ?? 5,
     autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? false,
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
-    outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
+    outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? stableDefaults.outOfRangeWaitMinutes ?? 30,
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
     oorCooldownHours:       u.oorCooldownHours       ?? 12,
     repeatDeployCooldownEnabled: u.repeatDeployCooldownEnabled ?? true,
@@ -109,12 +140,12 @@ export const config = {
     repeatDeployCooldownScope: u.repeatDeployCooldownScope ?? "token", // pool | token | both
     repeatDeployCooldownMinFeeEarnedPct: u.repeatDeployCooldownMinFeeEarnedPct ?? u.repeatDeployCooldownMinFeeYieldPct ?? 0,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
-    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
+    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? stableDefaults.stopLossPct ?? -50,
     takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
     minFeePerTvl24h:       u.minFeePerTvl24h       ?? 7,
-    minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
+    minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? stableDefaults.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
     minSolToOpen:          u.minSolToOpen          ?? 0.55,
-    deployAmountSol:       u.deployAmountSol       ?? 0.5,
+    deployAmountSol:       u.deployAmountSol       ?? stableDefaults.deployAmountSol ?? 0.5,
     gasReserve:            u.gasReserve            ?? 0.2,
     positionSizePct:       u.positionSizePct       ?? 0.35,
     // Trailing take-profit
@@ -243,6 +274,10 @@ export function reloadScreeningThresholds() {
     if (!fs.existsSync(USER_CONFIG_PATH)) return;
     const fresh = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
     const s = config.screening;
+    if (fresh.riskMode != null) config.risk.riskMode = fresh.riskMode;
+    for (const key of ["maxPositions", "maxDeployAmount", "maxDailyDeploySol", "maxDailyLossUsd", "maxConsecutiveLosses", "maxActionLockAgeMin", "minEntryScore", "watchScore", "normalSizeScore", "maxSizeScore", "minSizeMultiplier", "normalSizeMultiplier", "maxSizeMultiplier", "lossSizeMultiplier", "lossCooldownHours"]) {
+      if (fresh[key] !== undefined) config.risk[key] = fresh[key];
+    }
     if (fresh.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = fresh.minFeeActiveTvlRatio;
     if (fresh.minTokenFeesSol  != null) s.minTokenFeesSol  = fresh.minTokenFeesSol;
     if (fresh.maxTop10Pct      != null) s.maxTop10Pct      = fresh.maxTop10Pct;

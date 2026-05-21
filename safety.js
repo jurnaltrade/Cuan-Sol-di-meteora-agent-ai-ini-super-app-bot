@@ -204,6 +204,7 @@ export function formatSafetyStatus() {
     `Safety: ${state.paused ? "PAUSED" : "active"}`,
     state.pausedReason ? `Reason: ${state.pausedReason}` : null,
     `Today: ${state.todayKey}`,
+    `Risk mode: ${config.risk.riskMode} | loss cooldown: ${config.risk.lossCooldownHours}h`,
     `Deployed: ${today.deployedSol} / ${deployCap} SOL (${today.deployCount} deploys)`,
     `Realized loss: $${today.realizedLossUsd} / $${lossCap}`,
     `Consecutive losses: ${state.consecutiveLosses} / ${lossStreakCap}`,

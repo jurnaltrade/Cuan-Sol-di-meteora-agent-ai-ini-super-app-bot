@@ -5,6 +5,7 @@ import { log } from "../logger.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
 import { confirmIndicatorPreset } from "./chart-indicators.js";
 import { getAgentMeridianBase, getAgentMeridianHeaders } from "./agent-meridian.js";
+import { scoreEntryCandidate } from "../risk-policy.js";
 
 const DATAPI_JUP = "https://datapi.jup.ag/v1";
 
@@ -30,7 +31,7 @@ function normalizeSymbol(symbol) {
   return String(symbol || "").trim().toUpperCase();
 }
 
-function scoreCandidate(pool) {
+function rankCandidateScore(pool) {
   const feeTvl = Number(pool.fee_active_tvl_ratio || 0);
   const organic = Number(pool.organic_score || 0);
   const volume = Number(pool.volume_window || 0);
@@ -286,7 +287,7 @@ async function findRivalPool(mint) {
 
 async function enrichPvpRisk(pools) {
   const shortlist = [...pools]
-    .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))
+    .sort((a, b) => rankCandidateScore(b) - rankCandidateScore(a))
     .slice(0, PVP_SHORTLIST_LIMIT);
 
   if (shortlist.length === 0) return;
@@ -546,7 +547,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
       }
       return true;
     })
-    .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))
+    .sort((a, b) => rankCandidateScore(b) - rankCandidateScore(a))
     .slice(0, limit);
 
   if (config.screening.avoidPvpSymbols && eligible.length > 0) {
@@ -696,6 +697,29 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     eligible.splice(0, eligible.length, ...confirmedEligible);
     if (eligible.length < before) {
       log("screening", `Indicator confirmation removed ${before - eligible.length} candidate(s)`);
+    }
+  }
+
+  if (eligible.length > 0) {
+    const before = eligible.length;
+    const scored = eligible.map((pool) => {
+      const entry = scoreEntryCandidate(pool);
+      pool.entry_score = entry.score;
+      pool.entry_band = entry.band;
+      pool.entry_reasons = entry.reasons;
+      pool.entry_penalties = entry.penalties;
+      return { pool, entry };
+    });
+    const deployable = scored.filter(({ pool, entry }) => {
+      if (entry.pass) return true;
+      pushFilteredReason(filteredOut, pool, entry.rejectReason);
+      log("screening", `Entry score rejected ${pool.name} (${pool.pool.slice(0, 8)}): ${entry.score} ${entry.band}`);
+      return false;
+    });
+    eligible.splice(0, eligible.length, ...deployable.map(({ pool }) => pool));
+    eligible.sort((a, b) => (b.entry_score ?? 0) - (a.entry_score ?? 0));
+    if (eligible.length < before) {
+      log("screening", `Entry scoring removed ${before - eligible.length} candidate(s)`);
     }
   }
 
