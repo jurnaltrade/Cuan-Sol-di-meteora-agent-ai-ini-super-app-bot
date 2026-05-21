@@ -161,6 +161,20 @@ export function recordPoolDeploy(poolAddress, deployData) {
     entry.base_mint = deployData.base_mint;
   }
 
+  // Set cooldown after losing closes — prevents immediate revenge/redeploy loops
+  if ((deploy.pnl_pct ?? 0) < 0) {
+    const cooldownHours = Math.max(0, Number(config.risk.lossCooldownHours ?? 0));
+    if (cooldownHours > 0) {
+      const reason = `loss close (${deploy.pnl_pct}%)`;
+      const poolCooldownUntil = setPoolCooldown(entry, cooldownHours, reason);
+      const mintCooldownUntil = setBaseMintCooldown(db, entry.base_mint, cooldownHours, reason);
+      log("pool-memory", `Loss cooldown set for ${entry.name} until ${poolCooldownUntil} (${reason})`);
+      if (entry.base_mint && mintCooldownUntil) {
+        log("pool-memory", `Base mint cooldown set for ${entry.base_mint.slice(0, 8)} until ${mintCooldownUntil} (${reason})`);
+      }
+    }
+  }
+
   // Set cooldown for low yield closes — pool wasn't profitable enough, don't redeploy soon
   if (deploy.close_reason === "low yield") {
     const cooldownHours = 4;
