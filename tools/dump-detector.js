@@ -2,14 +2,16 @@
  * Dump Detection Engine
  *
  * Mendeteksi dump mendadak pada posisi terbuka dengan mengecek:
- *   1. Price crash   — price_change_pct 5m window (default threshold: -15%)
- *   2. LP removal    — TVL turun vs baseline saat deploy (default: -30%)
- *   3. Sell pressure — sell_vol harus memenuhi DUA kondisi sekaligus:
- *                        a) sell_vol / buy_vol >= dumpSellBuyRatio (default: 3×)
- *                        b) sell_vol / current_tvl >= dumpSellPctOfTvl (default: 15%)
- *                      Kondisi (b) menormalisasi ke ukuran pool sehingga 1 whale sell
- *                      besar di pool TVL besar tidak langsung trigger false positive.
- *   4. MC drop       — market cap turun vs baseline saat deploy (default: -25%)
+ *   1. Price crash     — price_change_pct 5m window (default: -15%)
+ *   2. LP removal      — TVL turun vs baseline saat deploy (default: -30%)
+ *   3. Sell pressure   — sell_vol 1h harus memenuhi DUA kondisi:
+ *                          a) sell_vol / buy_vol >= dumpSellBuyRatio (default: 3×)
+ *                          b) sell_vol / tvl >= dumpSellPctOfTvl (default: 15%)
+ *   4. MC drop         — market cap turun vs baseline saat deploy (default: -25%)
+ *   5. Volume spike    — volume 5m / TVL >= dumpVolSpike5mPct (default: 20%)
+ *                        DAN harga turun (price_change_pct < 0)
+ *                        Menangkap dev dump / whale dump 1 tx yang tidak terdeteksi
+ *                        sinyal 3 karena sinyal 3 pakai window 1 jam.
  *
  * Semua threshold bisa diatur via user-config.json (lihat config.js management block).
  */
@@ -141,6 +143,32 @@ export function checkDumpSignals(trackedPos, poolDetail, tokenInfo, cfg) {
         `MC turun ${mcapDropPct.toFixed(0)}% ` +
         `($${Math.round(mcapAtDeploy / 1000)}k → $${Math.round(currentMcap / 1000)}k) ` +
         `(threshold: ${mcapThreshold}%)`
+      );
+    }
+  }
+
+  // ── 5. Volume spike 5m (dev dump / whale dump 1 tx) ───────────────────
+  //
+  //   Sinyal 3 pakai window 1 jam — kalau dev dump di menit ke-45, ada buy
+  //   history dari awal jam yang mengencerkan rasionya → bisa lolos sinyal 3.
+  //   Sinyal ini pakai volume 5m dari poolDetail (sudah ada, tidak butuh API baru):
+  //     volume_5m / tvl >= dumpVolSpike5mPct  →  ada aktivitas besar mendadak
+  //     DAN price_change_pct < 0              →  arahnya turun (bukan pump)
+  const volSpike5mThreshold = cfg.dumpVolSpike5mPct ?? 20;
+  const vol5m = poolDetail?.volume_window ?? null;
+  metrics.vol_5m = vol5m;
+  if (
+    vol5m !== null && vol5m > 0 &&
+    currentTvl !== null && currentTvl > 0 &&
+    priceDrop5m !== null && priceDrop5m < 0
+  ) {
+    const volSpikePct = (vol5m / currentTvl) * 100;
+    metrics.vol_spike_pct = parseFloat(volSpikePct.toFixed(1));
+    if (volSpikePct >= volSpike5mThreshold) {
+      signals.push(
+        `volume spike: vol 5m = ${volSpikePct.toFixed(0)}% TVL saat harga turun ${priceDrop5m.toFixed(1)}% ` +
+        `($${Math.round(vol5m).toLocaleString()} / TVL $${Math.round(currentTvl).toLocaleString()}) ` +
+        `(threshold: >${volSpike5mThreshold}% TVL & harga turun)`
       );
     }
   }

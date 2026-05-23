@@ -95,6 +95,7 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 | dumpSellBuyRatio | management | 3 (AND dumpSellPctOfTvl, keduanya wajib) |
 | dumpSellPctOfTvl | management | 15 (sell vol 1h harus ≥ X% dari TVL pool) |
 | dumpMcapDropPct | management | -25 |
+| dumpVolSpike5mPct | management | 20 (vol 5m >= X% TVL & harga turun → dev/whale dump 1 tx) |
 | managementIntervalMin | schedule | 10 |
 | screeningIntervalMin | schedule | 30 |
 | managementModel / screeningModel / generalModel | llm | openrouter/healer-alpha |

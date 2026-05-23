@@ -212,6 +212,9 @@ export const config = {
     dumpSellPctOfTvl:      u.dumpSellPctOfTvl      ?? 15,
     // Threshold MC turun (%) vs saat deploy. Default -25%.
     dumpMcapDropPct:       u.dumpMcapDropPct       ?? -25,
+    // Volume 5m >= X% dari TVL DAN harga turun → dev dump / whale dump 1 tx
+    // Menangkap dump mendadak yg lolos sinyal sell pressure (window 1h terlalu lebar)
+    dumpVolSpike5mPct:     u.dumpVolSpike5mPct     ?? 20,
   },
 
   // ─── Strategy Mapping ───────────────────

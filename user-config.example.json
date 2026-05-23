@@ -81,6 +81,7 @@
   "dumpSellBuyRatio": 3,
   "dumpSellPctOfTvl": 15,
   "dumpMcapDropPct": -25,
+  "dumpVolSpike5mPct": 20,
 
   "temperature": 0.373,
   "maxTokens": 4096,
