@@ -942,7 +942,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
               continue;
             }
             log("dump_warn", reason);
-            if (telegramEnabled()) sendMessage(`⚠️ ${reason}`).catch(() => {});
+            if (telegramEnabled()) sendMessage(reason).catch(() => {});
             _pollTriggeredAt = 0;
             runManagementCycle({ silent: true }).catch((e) =>
               log("cron_error", `Dump-triggered management failed: ${e.message}`)
