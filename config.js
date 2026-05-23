@@ -194,6 +194,20 @@ export const config = {
     solMode:               u.solMode               ?? false,
     // Minimum floor for computeDeployAmount; autoresearch may set this lower
     minDeployAmountSol:    u.minDeployAmountSol    ?? 0.1,
+
+    // ── Dump Detection ───────────────────────────────────────────────────
+    // Semua setting bisa diatur di user-config.json
+    dumpDetectionEnabled:  u.dumpDetectionEnabled  ?? true,
+    // Seberapa sering cek dump (detik). Default 60s. Isi lebih kecil untuk reaksi lebih cepat.
+    dumpCheckIntervalSec:  u.dumpCheckIntervalSec  ?? 60,
+    // Threshold harga turun (%) dalam window 5m. Default -15%.
+    dumpPriceDrop5mPct:    u.dumpPriceDrop5mPct    ?? -15,
+    // Threshold TVL turun (%) vs saat deploy. Default -30% (LP besar keluar).
+    dumpLpRemovalPct:      u.dumpLpRemovalPct      ?? -30,
+    // Threshold rasio sell/buy volume (1h). Default 5× (sell 5x lebih besar dari buy).
+    dumpSellBuyRatio:      u.dumpSellBuyRatio      ?? 5,
+    // Threshold MC turun (%) vs saat deploy. Default -25%.
+    dumpMcapDropPct:       u.dumpMcapDropPct       ?? -25,
   },
 
   // ─── Strategy Mapping ───────────────────
