@@ -925,6 +925,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
         const openPositions = getTrackedPositions(true);
         if (openPositions.length === 0) return;
         _dumpCheckBusy = true;
+        log("dump", `Checking ${openPositions.length} position(s) for dump signals...`);
         try {
           for (const trackedPos of openPositions) {
             if (!trackedPos.pool) continue;
@@ -932,10 +933,14 @@ Summarize the current portfolio health, total fees earned, and performance of al
               trackedPos.pool,
               trackedPos.base_mint || null,
             ).catch(() => ({ poolDetail: null, tokenInfo: null }));
-            const { isDump, reason } = checkDumpSignals(
+            const { isDump, reason, signals } = checkDumpSignals(
               trackedPos, poolDetail, tokenInfo, config.management,
             );
-            if (!isDump) continue;
+            const pair = trackedPos.pool_name || trackedPos.pool?.slice(0, 8) || "?";
+            if (!isDump) {
+              log("dump", `[${pair}] OK — no dump signals (checked ${signals?.length ?? 0} active)`);
+              continue;
+            }
             log("dump_warn", reason);
             if (telegramEnabled()) sendMessage(`⚠️ ${reason}`).catch(() => {});
             _pollTriggeredAt = 0;
@@ -953,10 +958,15 @@ Summarize the current portfolio health, total fees earned, and performance of al
   _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog];
   _cronTasks._pnlPollInterval  = pnlPollInterval;
   _cronTasks._dumpCheckInterval = dumpCheckInterval;
-  const dumpStatus = config.management.dumpDetectionEnabled
-    ? `dump check every ${config.management.dumpCheckIntervalSec}s`
-    : "dump check disabled";
-  log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m, ${dumpStatus}`);
+  const dumpSec = config.management.dumpCheckIntervalSec;
+  const minSig  = config.management.dumpMinSignals;
+  if (config.management.dumpDetectionEnabled) {
+    log("dump", `Dump detection ON — interval ${dumpSec}s, min signals to close: ${minSig}`);
+    log("dump", `Thresholds: price<=${config.management.dumpPriceDrop5mPct}% | LP<=${config.management.dumpLpRemovalPct}% | sell/buy>=${config.management.dumpSellBuyRatio}x & sell/TVL>=${config.management.dumpSellPctOfTvl}% | mcap<=${config.management.dumpMcapDropPct}% | vol5m>=${config.management.dumpVolSpike5mPct}%&price<=${config.management.dumpVolSpikePriceMinPct}%`);
+  } else {
+    log("dump", "Dump detection DISABLED");
+  }
+  log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
 }
 
 // ═══════════════════════════════════════════
