@@ -121,22 +121,6 @@ export const config = {
     solMode:               u.solMode               ?? false,
   },
 
-  // ─── Emergency Exit Rules ───────────────
-  emergencyExits: {
-    volumeCollapse: {
-      enabled:           u.emergencyExits?.volumeCollapse?.enabled           ?? true,
-      dropThresholdPct:  u.emergencyExits?.volumeCollapse?.dropThresholdPct  ?? 30,
-      minPositionAgeMin: u.emergencyExits?.volumeCollapse?.minPositionAgeMin ?? 10,
-      minPeakVolumeUsd:  u.emergencyExits?.volumeCollapse?.minPeakVolumeUsd  ?? 2000,
-      sellPressureRatio: u.emergencyExits?.volumeCollapse?.sellPressureRatio ?? 2,
-    },
-    rapidPriceDrop: {
-      enabled:            u.emergencyExits?.rapidPriceDrop?.enabled            ?? true,
-      dropPct5m:          u.emergencyExits?.rapidPriceDrop?.dropPct5m          ?? -8,
-      requireNegativePnl: u.emergencyExits?.rapidPriceDrop?.requireNegativePnl ?? true,
-    },
-  },
-
   // ─── Strategy Mapping ───────────────────
   strategy: {
     strategy:     u.strategy     ?? "bid_ask",

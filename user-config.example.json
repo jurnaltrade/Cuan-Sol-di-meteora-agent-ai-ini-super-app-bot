@@ -98,6 +98,21 @@
     "rsiOverbought": 80,
     "requireAllIntervals": false
   },
+  "emergencyExits": {
+    "volumeCollapse": {
+      "enabled": true,
+      "dropThresholdPct": 30,
+      "minPositionAgeMin": 10,
+      "minPeakVolumeUsd": 2000,
+      "sellPressureRatio": 2
+    },
+    "rapidPriceDrop": {
+      "enabled": true,
+      "dropPct5m": -8,
+      "requireNegativePnl": true
+    }
+  },
+
   "telegramChatId": "",
   "hiveMindUrl": "",
   "hiveMindApiKey": "",

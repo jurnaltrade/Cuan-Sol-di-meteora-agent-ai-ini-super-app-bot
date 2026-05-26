@@ -104,6 +104,9 @@ export function trackPosition({
     confirmed_trailing_exit_reason: null,
     confirmed_trailing_exit_until: null,
     trailing_active: false,
+    peak_volume_5m_usd: null,
+    last_market_data_at: null,
+    volume_history: [],
   };
   pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
   save(state);
@@ -148,6 +151,39 @@ export function minutesOutOfRange(position_address) {
   if (!pos || !pos.out_of_range_since) return 0;
   const ms = Date.now() - new Date(pos.out_of_range_since).getTime();
   return Math.floor(ms / 60000);
+}
+
+/**
+ * Update market data fields for multiple positions in a single disk write.
+ * Migrates existing positions that predate these fields.
+ *
+ * @param {Map<string, {volume_5m: number|null, fetched_at: string}>} updates
+ *   Map of position_address → market data object from fetchPoolMarketData
+ */
+export function batchUpdateMarketData(updates) {
+  if (!updates || updates.size === 0) return;
+  const state = load();
+  const now = new Date().toISOString();
+  for (const [position_address, md] of updates) {
+    const pos = state.positions[position_address];
+    if (!pos) continue;
+    // Migrate fields if missing (existing positions pre-patch)
+    if (pos.peak_volume_5m_usd === undefined) pos.peak_volume_5m_usd = null;
+    if (!Array.isArray(pos.volume_history)) pos.volume_history = [];
+
+    const vol5m = md.volume_5m ?? null;
+    // Update peak
+    if (vol5m != null && (pos.peak_volume_5m_usd == null || vol5m > pos.peak_volume_5m_usd)) {
+      pos.peak_volume_5m_usd = vol5m;
+    }
+    // Append to rolling history (max 5 entries)
+    if (vol5m != null) {
+      pos.volume_history.push({ ts: md.fetched_at ?? now, volume_5m: vol5m });
+      if (pos.volume_history.length > 5) pos.volume_history.shift();
+    }
+    pos.last_market_data_at = md.fetched_at ?? now;
+  }
+  save(state);
 }
 
 /**

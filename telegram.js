@@ -476,6 +476,30 @@ export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOu
   );
 }
 
+export async function notifyEmergencyExit({ pair, reason, volume5m, peakVolume5m, priceChange5m, txnBuys5m, txnSells5m, pnlPct }) {
+  const volumeRatioPct = (peakVolume5m > 0 && volume5m != null)
+    ? Math.round((volume5m / peakVolume5m) * 100)
+    : null;
+  const sellRatio = (txnBuys5m != null && txnBuys5m > 0)
+    ? (txnSells5m / txnBuys5m).toFixed(1)
+    : "∞";
+  const priceLine = priceChange5m != null
+    ? `${priceChange5m > 0 ? "+" : ""}${priceChange5m.toFixed(2)}%`
+    : "?";
+  const pnlLine = pnlPct != null
+    ? `${pnlPct > 0 ? "+" : ""}${pnlPct.toFixed(2)}%`
+    : "?";
+  await sendHTML(
+    `⚠️ <b>EMERGENCY EXIT</b>\n` +
+    `Pair: ${pair}\n` +
+    `Reason: <code>${reason}</code>\n` +
+    `Volume 5m: $${volume5m?.toFixed(0) ?? "?"} (peak $${peakVolume5m?.toFixed(0) ?? "?"}, ${volumeRatioPct ?? "?"}% of peak)\n` +
+    `Price Δ 5m: ${priceLine}\n` +
+    `Sell pressure: ${txnSells5m ?? "?"} sells / ${txnBuys5m ?? "?"} buys (${sellRatio}x)\n` +
+    `PnL at exit: ${pnlLine}`
+  );
+}
+
 export async function notifyOutOfRange({ pair, minutesOOR }) {
   if (hasActiveLiveMessage()) return;
   await sendHTML(
