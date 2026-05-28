@@ -651,7 +651,7 @@ STEPS:
    pass deploy_position.volatility = the candidate volatility value.
    For single-side SOL deploys, do not invent upside:
    set amount_y only, keep amount_x = 0, keep bins_above = 0, and let the upper bin stay at the active bin.
-4. Report in this exact format (no tables, no extra sections):
+4. If a pool qualified, you called deploy_position, AND the tool call reported SUCCESS, report in this exact format (no tables, no extra sections):
    🚀 DEPLOYED
 
    <pool name>
@@ -690,7 +690,7 @@ STEPS:
 
    WHY THIS WON
    <2-4 concise sentences on why this pool won, key risks, and why it still beat the alternatives>
-5. If no pool qualifies, report in this exact format instead:
+5. If no pool qualifies, or if a deploy_position tool call was made but it failed/was blocked/returned success: false, report in this exact format instead:
    ⛔ NO DEPLOY
 
    Cycle finished with no valid entry.
@@ -699,10 +699,10 @@ STEPS:
    <name or none>
 
    WHY SKIPPED
-   <2-4 concise sentences explaining why nothing was good enough>
+   <2-4 concise sentences explaining why nothing was deployed, including the exact error message if a deploy_position tool call failed/was blocked>
 
    REJECTED
-   <short flat list of top candidate names and why they were skipped>
+   <short flat list of top candidate names and why they were skipped or failed>
 IMPORTANT:
 - Never write "unknown" for OKX. Use real values, omit missing fields, or write exactly "OKX: unavailable".
 - Keep the whole report compact and highly scannable for Telegram.

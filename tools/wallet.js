@@ -6,21 +6,45 @@ import {
   Keypair,
 } from "@solana/web3.js";
 import bs58 from "bs58";
+import fs from "fs";
 import { log } from "../logger.js";
 import { config } from "../config.js";
+import { decryptWallet } from "../decrypt_wallet.js";
 
 let _connection = null;
 let _wallet = null;
 
-function getConnection() {
+export function getConnection() {
   if (!_connection) _connection = new Connection(process.env.RPC_URL, "confirmed");
   return _connection;
 }
 
-function getWallet() {
+export function getWallet() {
   if (!_wallet) {
-    if (!process.env.WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not set");
-    _wallet = Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
+    const keypairPath = process.env.WALLET_KEYPAIR_PATH;
+    const privateKey = process.env.WALLET_PRIVATE_KEY;
+    const password = process.env.WALLET_PASSWORD;
+
+    if (keypairPath) {
+      if (keypairPath.endsWith(".enc")) {
+        if (!password) {
+          throw new Error("WALLET_PASSWORD required to decrypt .enc wallet");
+        }
+        const decrypted = decryptWallet(keypairPath, password);
+        _wallet = Keypair.fromSecretKey(new Uint8Array(JSON.parse(decrypted.toString())));
+      } else {
+        const keypairData = JSON.parse(fs.readFileSync(keypairPath, "utf-8"));
+        _wallet = Keypair.fromSecretKey(new Uint8Array(keypairData));
+      }
+    } else if (fs.existsSync("wallet.enc") && password) {
+      log("wallet", "Loading from default wallet.enc");
+      const decrypted = decryptWallet("wallet.enc", password);
+      _wallet = Keypair.fromSecretKey(new Uint8Array(JSON.parse(decrypted.toString())));
+    } else if (privateKey) {
+      _wallet = Keypair.fromSecretKey(bs58.decode(privateKey));
+    } else {
+      throw new Error("No wallet configuration found (WALLET_PRIVATE_KEY, WALLET_KEYPAIR_PATH, or wallet.enc)");
+    }
   }
   return _wallet;
 }

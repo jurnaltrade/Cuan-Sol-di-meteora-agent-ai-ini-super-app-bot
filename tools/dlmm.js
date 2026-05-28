@@ -25,7 +25,7 @@ import {
 } from "../state.js";
 import { recordPerformance } from "../lessons.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
-import { normalizeMint } from "./wallet.js";
+import { normalizeMint, getWallet, getConnection } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
 import { agentMeridianJson, getAgentIdForRequests, getAgentMeridianHeaders } from "./agent-meridian.js";
 import { getAndClearStagedSignals } from "../signal-tracker.js";
@@ -73,29 +73,7 @@ async function getDLMM() {
   };
 }
 
-// ─── Lazy wallet/connection init ──────────────────────────────
-// Avoids crashing on import when WALLET_PRIVATE_KEY is not yet set
-// (e.g. during screening-only tests).
-let _connection = null;
-let _wallet = null;
-
-function getConnection() {
-  if (!_connection) {
-    _connection = new Connection(process.env.RPC_URL, "confirmed");
-  }
-  return _connection;
-}
-
-function getWallet() {
-  if (!_wallet) {
-    if (!process.env.WALLET_PRIVATE_KEY) {
-      throw new Error("WALLET_PRIVATE_KEY not set");
-    }
-    _wallet = Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
-    log("init", `Wallet: ${_wallet.publicKey.toString()}`);
-  }
-  return _wallet;
-}
+// Wallet and connection are imported from tools/wallet.js to support encrypted wallet decryption and prevent ESM require() runtime errors.
 
 function shouldUseLpAgentRelay() {
   return !!config.api.lpAgentRelayEnabled;
