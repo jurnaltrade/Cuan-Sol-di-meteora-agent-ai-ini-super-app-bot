@@ -493,3 +493,12 @@ func HotReload() error {
 	Set(newCfg)
 	return nil
 }
+
+func SaveConfig(cfg *Config) error {
+	bytes, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ConfigFile, bytes, 0644)
+}
+
