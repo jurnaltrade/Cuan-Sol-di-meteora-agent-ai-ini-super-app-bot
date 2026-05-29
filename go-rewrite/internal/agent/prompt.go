@@ -30,7 +30,7 @@ HARD RULES:
 
 CONFIGURATION:
 - Strategy: %s | bins_below: %d-%d | default: %d
-- Deploy: %.2f SOL | gas reserve: %.2f SOL | min wallet: %.2f SOL
+- Deploy: %.2f SOL | gas reserve: %.2f SOL | min SOL to start screening: %.2f SOL (pre-deploy threshold only, wallet can drop below this after deploy)
 - Stop loss: %.0f%% | take profit: %.0f%% | trailing TP: %v
 - OOR: %dm wait, close after %d bins above
 - Screening: %s/%s | TVL $%.0f-$%.0f | volume >= $%.0f | organic >= %.0f
@@ -77,9 +77,17 @@ func getRoleSpecificPrompt(agentType string, cfg *config.Config) string {
 - You find and deploy into new pools. Your job is picking winners, not managing open positions.
 - Use get_top_candidates to see pre-scored pools. The data is already enriched with OKX risk, smart wallets, narrative, and active_bin.
 - Pick the BEST candidate. If only one survives filtering, still judge it — a single weak candidate should be skipped.
+- Wallet Balance & Deployability:
+  * To deploy, you only need: wallet balance >= (deploy_amount + gas_reserve).
+  * The "min SOL to start screening" (%.2f SOL) is only a pre-check threshold before screening starts. It is NOT added to the required amount.
+  * For example, with %.2f SOL deploy and %.2f SOL gas, you only need %.2f SOL to deploy, NOT %.2f SOL. Do NOT add the pre-check threshold to the required amount.
 - Deploy amount: compute from wallet balance × %.2f (position size) clamped to [%.2f, %.2f] SOL.
 - bins_below = round(%d + (volatility/5) × %d) clamped to [%d, %d].
 - If deploy fails or is blocked, do NOT retry. Report ⛔ NO DEPLOY and explain why.`,
+			config.ComputeMinOpenBalance(cfg),
+			cfg.Management.DeployAmountSol, cfg.Management.GasReserve,
+			cfg.Management.DeployAmountSol+cfg.Management.GasReserve,
+			cfg.Management.DeployAmountSol+cfg.Management.GasReserve+config.ComputeMinOpenBalance(cfg),
 			cfg.Management.PositionSizePct, cfg.Management.DeployAmountSol, cfg.Risk.MaxDeployAmount,
 			cfg.Strategy.MinBinsBelow, cfg.Strategy.MaxBinsBelow-cfg.Strategy.MinBinsBelow, cfg.Strategy.MinBinsBelow, cfg.Strategy.MaxBinsBelow)
 
