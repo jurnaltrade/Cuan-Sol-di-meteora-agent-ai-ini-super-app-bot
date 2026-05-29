@@ -22,6 +22,9 @@ type Position struct {
 	PnLPct           float64 `json:"pnl_pct"`
 	InRange          bool    `json:"in_range"`
 	UnclaimedFeesUSD float64 `json:"unclaimed_fees_usd"`
+	TotalValueUSD    float64 `json:"total_value_usd"`
+	CollectedFeesUSD float64 `json:"collected_fees_usd"`
+	AgeMinutes       *int    `json:"age_minutes"`
 }
 
 type GetMyPositionsResult struct {

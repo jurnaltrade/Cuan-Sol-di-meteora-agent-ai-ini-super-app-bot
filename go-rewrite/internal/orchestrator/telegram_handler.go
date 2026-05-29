@@ -158,12 +158,38 @@ func handleTelegramMessage(cfg *config.Config, msg *tgbotapi.Message) {
 				if len(posShort) > 8 {
 					posShort = posShort[:8]
 				}
+
+				ageStr := "Unknown"
+				if p.AgeMinutes != nil {
+					mins := *p.AgeMinutes
+					if mins < 60 {
+						ageStr = fmt.Sprintf("%dm", mins)
+					} else {
+						hours := mins / 60
+						days := hours / 24
+						remHours := hours % 24
+						remMins := mins % 60
+						if days > 0 {
+							ageStr = fmt.Sprintf("%dd %dh", days, remHours)
+						} else {
+							ageStr = fmt.Sprintf("%dh %dm", remHours, remMins)
+						}
+					}
+				}
+
+				sign := ""
+				if p.PnLUSD > 0 {
+					sign = "+"
+				}
+
 				sb.WriteString(fmt.Sprintf("%d. <b>%s</b>\n"+
 					"• Position: <code>%s</code>\n"+
 					"• Status: %s\n"+
-					"• PnL: $%.2f (%.2f%%)\n"+
-					"• Unclaimed Fees: $%.2f\n\n",
-					i+1, p.Pair, posShort, rangeStatus, p.PnLUSD, p.PnLPct, p.UnclaimedFeesUSD))
+					"• Age: <code>%s</code>\n"+
+					"• Size: <code>$%.2f</code>\n"+
+					"• PnL: <b>%s$%.2f (%s%.2f%%)</b>\n"+
+					"• Fees: <code>$%.2f</code> ($%.2f claimed, $%.2f unclaimed)\n\n",
+					i+1, p.Pair, posShort, rangeStatus, ageStr, p.TotalValueUSD, sign, p.PnLUSD, sign, p.PnLPct, p.CollectedFeesUSD+p.UnclaimedFeesUSD, p.CollectedFeesUSD, p.UnclaimedFeesUSD))
 			}
 			telegram.SendHTMLToChat(msg.Chat.ID, sb.String())
 
