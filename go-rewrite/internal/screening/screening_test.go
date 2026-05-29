@@ -1,8 +1,8 @@
 package screening
 
 import (
-	"testing"
 	"meridian-go-rewrite/internal/config"
+	"testing"
 )
 
 func TestDiscoverAndScore(t *testing.T) {

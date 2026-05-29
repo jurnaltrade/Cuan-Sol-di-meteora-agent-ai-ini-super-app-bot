@@ -171,7 +171,7 @@ func runManagementCycle(cfg *config.Config, silent bool) {
 		// Minimum Claim threshold
 		if p.UnclaimedFeesUSD >= cfg.Management.MinClaimAmount {
 			needsAction = true
-			reason = fmt.Sprintf("claimable fees on %s ($%.2f >= $%.2f)", p.Pair, p.UnclaimedFeesUSD, cfg.Management.MinClaimAmount)
+			reason = fmt.Sprintf("claimable fees on %s ($%.4f >= $%.4f)", p.Pair, p.UnclaimedFeesUSD, cfg.Management.MinClaimAmount)
 			break
 		}
 	}
@@ -191,8 +191,8 @@ func runManagementCycle(cfg *config.Config, silent bool) {
 					inRangeStr = fmt.Sprintf("🔴 Out of Range (%dm)", oorMin)
 				}
 				sb.WriteString(fmt.Sprintf("• <b>%s</b>\n"+
-					"  • Value: <code>$%.2f</code>\n"+
-					"  • Fees: <code>$%.2f</code>\n"+
+					"  • Value: <code>$%.4f</code>\n"+
+					"  • Fees: <code>$%.4f</code>\n"+
 					"  • PnL: <code>%.2f%%</code>\n"+
 					"  • Status: %s\n\n",
 					p.Pair, p.TotalValueUSD, p.UnclaimedFeesUSD, p.PnLPct, inRangeStr))

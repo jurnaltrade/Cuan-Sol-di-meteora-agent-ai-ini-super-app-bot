@@ -90,33 +90,33 @@ func EnsureDefaultStrategies() {
 
 	defaults := map[string]Strategy{
 		"custom_ratio_spot": {
-			ID:         "custom_ratio_spot",
-			Name:       "Custom Ratio Spot",
-			Author:     "meridian",
-			LpStrategy: "spot",
+			ID:            "custom_ratio_spot",
+			Name:          "Custom Ratio Spot",
+			Author:        "meridian",
+			LpStrategy:    "spot",
 			TokenCriteria: StrategyCriteria{"notes": "Any token. Ratio expresses directional bias."},
 			Entry: StrategyCriteria{
 				"condition":   "Directional view on token",
 				"single_side": nil,
 				"notes":       "75% token = bullish (sell on pump out of range). 75% SOL = bearish/DCA-in (buy on dip). Set bins_below:bins_above proportional to ratio.",
 			},
-			Range: StrategyCriteria{"type": "custom", "notes": "bins_below:bins_above ratio matches token:SOL ratio. E.g., 75% token → ~52 bins below, ~17 bins above."},
-			Exit:  StrategyCriteria{"take_profit_pct": 10, "notes": "Close when OOR or TP hit. Re-deploy with updated ratio based on new momentum signals."},
+			Range:   StrategyCriteria{"type": "custom", "notes": "bins_below:bins_above ratio matches token:SOL ratio. E.g., 75% token → ~52 bins below, ~17 bins above."},
+			Exit:    StrategyCriteria{"take_profit_pct": 10, "notes": "Close when OOR or TP hit. Re-deploy with updated ratio based on new momentum signals."},
 			BestFor: "Expressing directional bias while earning fees both ways",
 		},
 		"single_sided_reseed": {
-			ID:         "single_sided_reseed",
-			Name:       "Single-Sided Bid-Ask + Re-seed",
-			Author:     "meridian",
-			LpStrategy: "bid_ask",
+			ID:            "single_sided_reseed",
+			Name:          "Single-Sided Bid-Ask + Re-seed",
+			Author:        "meridian",
+			LpStrategy:    "bid_ask",
 			TokenCriteria: StrategyCriteria{"notes": "Volatile tokens with strong narrative. Must have active volume."},
 			Entry: StrategyCriteria{
 				"condition":   "Deploy token-only (amount_x only, amount_y=0) bid-ask, bins below active bin only",
 				"single_side": "token",
 				"notes":       "As price drops through bins, token sold for SOL. Bid-ask concentrates at bottom edge.",
 			},
-			Range: StrategyCriteria{"type": "default", "bins_below_pct": 100, "notes": "All bins below active bin. bins_above=0."},
-			Exit:  StrategyCriteria{"notes": "When OOR downside: close_position(skip_swap=true) → redeploy token-only bid-ask at new lower price. Do NOT swap to SOL. Full close only when token dead or after N re-seeds with declining performance."},
+			Range:   StrategyCriteria{"type": "default", "bins_below_pct": 100, "notes": "All bins below active bin. bins_above=0."},
+			Exit:    StrategyCriteria{"notes": "When OOR downside: close_position(skip_swap=true) → redeploy token-only bid-ask at new lower price. Do NOT swap to SOL. Full close only when token dead or after N re-seeds with declining performance."},
 			BestFor: "Riding volatile tokens down without cutting losses. DCA out via LP.",
 		},
 	}
@@ -229,7 +229,7 @@ func GetStrategy(id string) map[string]interface{} {
 		}
 		return map[string]interface{}{"error": fmt.Sprintf("Strategy %q not found", id), "available": keys}
 	}
-	
+
 	bytes, _ := json.Marshal(s)
 	var m map[string]interface{}
 	json.Unmarshal(bytes, &m)
@@ -265,7 +265,7 @@ func RemoveStrategy(id string) map[string]interface{} {
 	if !exists {
 		return map[string]interface{}{"error": fmt.Sprintf("Strategy %q not found", id)}
 	}
-	
+
 	delete(lib.Strategies, id)
 	if lib.Active == id {
 		lib.Active = ""

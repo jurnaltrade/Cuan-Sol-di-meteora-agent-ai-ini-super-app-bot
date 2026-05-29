@@ -291,14 +291,14 @@ func NotifyDeploy(pair string, amountSol float64, position, strategy string, bin
 	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("🚀 <b>New Position Deployed: %s</b>\n\n", pair))
-	sb.WriteString(fmt.Sprintf("• <b>Size:</b> <code>%.2f SOL</code>\n", amountSol))
+	sb.WriteString(fmt.Sprintf("• <b>Size:</b> <code>%.4f SOL</code>\n", amountSol))
 	sb.WriteString(fmt.Sprintf("• <b>Strategy:</b> <code>%s</code> (Bins: -%d to +%d)\n", strategy, binsBelow, binsAbove))
 	sb.WriteString(fmt.Sprintf("• <b>Remaining Wallet:</b> <code>%.4f SOL</code>\n\n", balanceSol))
-	
+
 	if position != "" {
 		sb.WriteString(fmt.Sprintf("🔗 <a href=\"https://solscan.io/account/%s\">View Position on Solscan</a>", position))
 	}
-	
+
 	msg := tgbotapi.NewMessage(chatID, sb.String())
 	msg.ParseMode = "HTML"
 	msg.DisableWebPagePreview = true
@@ -313,7 +313,7 @@ func NotifyClose(pair string, pnlUSD, pnlPct float64, reason string, feesUSD flo
 	if pnlUSD >= 0 {
 		sign = "+"
 	}
-	
+
 	icon := "🔒"
 	if reason == "stop_loss" {
 		icon = "🚨"
@@ -323,9 +323,9 @@ func NotifyClose(pair string, pnlUSD, pnlPct float64, reason string, feesUSD flo
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s <b>Position Closed: %s</b>\n\n", icon, pair))
-	sb.WriteString(fmt.Sprintf("• <b>Exit PnL:</b> <code>%s$%.2f (%s%.2f%%)</code>\n", sign, pnlUSD, sign, pnlPct))
+	sb.WriteString(fmt.Sprintf("• <b>Exit PnL:</b> <code>%s$%.4f (%s%.2f%%)</code>\n", sign, pnlUSD, sign, pnlPct))
 	if feesUSD > 0 {
-		sb.WriteString(fmt.Sprintf("• <b>Fees Collected:</b> <code>$%.2f</code>\n", feesUSD))
+		sb.WriteString(fmt.Sprintf("• <b>Fees Collected:</b> <code>$%.4f</code>\n", feesUSD))
 	}
 	if reason != "" {
 		sb.WriteString(fmt.Sprintf("• <b>Exit Reason:</b> <code>%s</code>\n", strings.ReplaceAll(reason, "_", " ")))

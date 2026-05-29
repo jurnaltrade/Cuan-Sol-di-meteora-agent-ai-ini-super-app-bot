@@ -20,11 +20,11 @@ import (
 )
 
 var (
-	userConfigPath      = "user-config.json"
-	cachePath           = "hivemind-cache.json"
-	heartbeatInterval   = 15 * time.Minute
-	agentVersion        = "1.0.0"
-	hivemindHTTPClient  = &http.Client{Timeout: 30 * time.Second}
+	userConfigPath     = "user-config.json"
+	cachePath          = "hivemind-cache.json"
+	heartbeatInterval  = 15 * time.Minute
+	agentVersion       = "1.0.0"
+	hivemindHTTPClient = &http.Client{Timeout: 30 * time.Second}
 )
 
 type SharedLesson struct {

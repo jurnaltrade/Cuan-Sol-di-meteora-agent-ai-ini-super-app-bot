@@ -94,7 +94,7 @@ func handleTelegramMessage(cfg *config.Config, msg *tgbotapi.Message) {
 				"• <b>Management Cycle</b>: %dm (Next in: %s)\n"+
 				"• <b>Screening Cycle</b>: %dm (Next in: %s)\n"+
 				"• <b>Strategy</b>: %s\n"+
-				"• <b>Min Open Balance</b>: %.2f SOL\n"+
+				"• <b>Min Open Balance</b>: %.4f SOL\n"+
 				"• <b>Max Positions</b>: %d",
 				mode,
 				walletShort,
@@ -120,9 +120,9 @@ func handleTelegramMessage(cfg *config.Config, msg *tgbotapi.Message) {
 				return
 			}
 			balMsg := fmt.Sprintf("💰 <b>Wallet Balances</b>\n\n"+
-				"• <b>SOL</b>: %.6f ($%.2f)\n"+
-				"• <b>USDC</b>: %.2f\n"+
-				"• <b>Total</b>: $%.2f",
+				"• <b>SOL</b>: %.6f ($%.4f)\n"+
+				"• <b>USDC</b>: %.4f\n"+
+				"• <b>Total</b>: $%.4f",
 				balances.SOL,
 				balances.SOL*balances.SOLPrice,
 				balances.USDC,
@@ -186,9 +186,9 @@ func handleTelegramMessage(cfg *config.Config, msg *tgbotapi.Message) {
 					"• Position: <code>%s</code>\n"+
 					"• Status: %s\n"+
 					"• Age: <code>%s</code>\n"+
-					"• Size: <code>$%.2f</code>\n"+
-					"• PnL: <b>%s$%.2f (%s%.2f%%)</b>\n"+
-					"• Fees: <code>$%.2f</code> ($%.2f claimed, $%.2f unclaimed)\n\n",
+					"• Size: <code>$%.4f</code>\n"+
+					"• PnL: <b>%s$%.4f (%s%.2f%%)</b>\n"+
+					"• Fees: <code>$%.4f</code> ($%.4f claimed, $%.4f unclaimed)\n\n",
 					i+1, p.Pair, posShort, rangeStatus, ageStr, p.TotalValueUSD, sign, p.PnLUSD, sign, p.PnLPct, p.CollectedFeesUSD+p.UnclaimedFeesUSD, p.CollectedFeesUSD, p.UnclaimedFeesUSD))
 			}
 			telegram.SendHTMLToChat(msg.Chat.ID, sb.String())

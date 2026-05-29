@@ -23,7 +23,7 @@ func GenerateBriefing() string {
 		if !p.Closed {
 			openPositions = append(openPositions, p)
 		}
-		
+
 		t, err := time.Parse(time.RFC3339, p.DeployedAt)
 		if err == nil && t.After(last24h) {
 			openedLast24h = append(openedLast24h, p)
@@ -68,13 +68,13 @@ func GenerateBriefing() string {
 	lines = append(lines, fmt.Sprintf("📤 Positions Closed: %d", len(closedLast24h)))
 	lines = append(lines, "")
 	lines = append(lines, "<b>Performance:</b>")
-	
+
 	sign := ""
 	if totalPnLUsd >= 0 {
 		sign = "+"
 	}
-	lines = append(lines, fmt.Sprintf("💰 Net PnL: %s$%.2f", sign, totalPnLUsd))
-	lines = append(lines, fmt.Sprintf("💎 Fees Earned: $%.2f", totalFeesUsd))
+	lines = append(lines, fmt.Sprintf("💰 Net PnL: %s$%.4f", sign, totalPnLUsd))
+	lines = append(lines, fmt.Sprintf("💎 Fees Earned: $%.4f", totalFeesUsd))
 
 	if len(perfLast24h) > 0 {
 		wins := 0
@@ -104,7 +104,7 @@ func GenerateBriefing() string {
 	lines = append(lines, fmt.Sprintf("📂 Open Positions: %d", len(openPositions)))
 
 	if perfSummary != nil {
-		lines = append(lines, fmt.Sprintf("📊 All-time PnL: $%.2f (%d%% win)", perfSummary.TotalPnlUsd, perfSummary.WinRatePct))
+		lines = append(lines, fmt.Sprintf("📊 All-time PnL: $%.4f (%d%% win)", perfSummary.TotalPnlUsd, perfSummary.WinRatePct))
 	}
 
 	lines = append(lines, "────────────────")

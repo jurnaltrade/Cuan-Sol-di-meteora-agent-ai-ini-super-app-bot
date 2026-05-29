@@ -323,9 +323,9 @@ func applyEnvOverrides(cfg *Config) {
 	} else if pwd := os.Getenv("WALLET_PASSWORD"); pwd != "" && cfg.Wallet.PrivateKey == "" {
 		plaintext, err := DecryptWallet("wallet.enc", pwd)
 		if err == nil {
-			// wallet.json usually contains the private key array or base58. 
+			// wallet.json usually contains the private key array or base58.
 			// the js agent expects array or base58 string.
-			// we'll assume the DecryptWallet gives us the contents of wallet.json, 
+			// we'll assume the DecryptWallet gives us the contents of wallet.json,
 			// let's unmarshal and find it.
 			var walletData interface{}
 			if err := json.Unmarshal(plaintext, &walletData); err == nil {

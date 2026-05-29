@@ -178,12 +178,12 @@ func EncryptWallet(walletPath, encPath, password string) error {
 	}
 
 	sealed := aesGCM.Seal(nil, iv, plaintext, nil)
-	
+
 	// sealed is ciphertext + authTag (16 bytes). We need to split it.
 	if len(sealed) < 16 {
 		return errors.New("sealed data too short")
 	}
-	
+
 	ciphertext := sealed[:len(sealed)-16]
 	authTag := sealed[len(sealed)-16:]
 

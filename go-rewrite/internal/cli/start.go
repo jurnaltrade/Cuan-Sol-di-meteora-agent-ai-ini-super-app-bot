@@ -45,7 +45,7 @@ var startCmd = &cobra.Command{
 		if cfg.DryRun {
 			mode = "DRY RUN"
 		}
-		fmt.Printf("Mode: %s (opens at >= %.2f SOL)\n", mode, config.ComputeMinOpenBalance(cfg))
+		fmt.Printf("Mode: %s (opens at >= %.4f SOL)\n", mode, config.ComputeMinOpenBalance(cfg))
 		if walletAddr != "" {
 			fmt.Printf("Wallet: %s...%s\n", walletAddr[:6], walletAddr[len(walletAddr)-4:])
 		}

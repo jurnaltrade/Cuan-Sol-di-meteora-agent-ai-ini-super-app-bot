@@ -23,49 +23,49 @@ const (
 )
 
 type PerformanceRecord struct {
-	Position          string                 `json:"position"`
-	Pool              string                 `json:"pool"`
-	PoolName          string                 `json:"pool_name"`
-	BaseMint          string                 `json:"base_mint,omitempty"`
-	Strategy          string                 `json:"strategy"`
-	BinRange          interface{}            `json:"bin_range"`
-	BinStep           int                    `json:"bin_step"`
-	Volatility        float64                `json:"volatility"`
-	FeeTvlRatio       float64                `json:"fee_tvl_ratio"`
-	OrganicScore      float64                `json:"organic_score"`
-	AmountSol         float64                `json:"amount_sol"`
-	FeesEarnedUsd     float64                `json:"fees_earned_usd"`
-	FeesEarnedSol     float64                `json:"fees_earned_sol,omitempty"`
-	FinalValueUsd     float64                `json:"final_value_usd"`
-	InitialValueUsd   float64                `json:"initial_value_usd"`
-	MinutesInRange    float64                `json:"minutes_in_range"`
-	MinutesHeld       float64                `json:"minutes_held"`
-	CloseReason       string                 `json:"close_reason"`
-	PnlUsd            float64                `json:"pnl_usd"`
-	PnlPct            float64                `json:"pnl_pct"`
-	RangeEfficiency   float64                `json:"range_efficiency"`
-	RecordedAt        string                 `json:"recorded_at"`
-	DeployedAt        string                 `json:"deployed_at,omitempty"`
-	SignalSnapshot    map[string]interface{} `json:"signal_snapshot,omitempty"`
+	Position        string                 `json:"position"`
+	Pool            string                 `json:"pool"`
+	PoolName        string                 `json:"pool_name"`
+	BaseMint        string                 `json:"base_mint,omitempty"`
+	Strategy        string                 `json:"strategy"`
+	BinRange        interface{}            `json:"bin_range"`
+	BinStep         int                    `json:"bin_step"`
+	Volatility      float64                `json:"volatility"`
+	FeeTvlRatio     float64                `json:"fee_tvl_ratio"`
+	OrganicScore    float64                `json:"organic_score"`
+	AmountSol       float64                `json:"amount_sol"`
+	FeesEarnedUsd   float64                `json:"fees_earned_usd"`
+	FeesEarnedSol   float64                `json:"fees_earned_sol,omitempty"`
+	FinalValueUsd   float64                `json:"final_value_usd"`
+	InitialValueUsd float64                `json:"initial_value_usd"`
+	MinutesInRange  float64                `json:"minutes_in_range"`
+	MinutesHeld     float64                `json:"minutes_held"`
+	CloseReason     string                 `json:"close_reason"`
+	PnlUsd          float64                `json:"pnl_usd"`
+	PnlPct          float64                `json:"pnl_pct"`
+	RangeEfficiency float64                `json:"range_efficiency"`
+	RecordedAt      string                 `json:"recorded_at"`
+	DeployedAt      string                 `json:"deployed_at,omitempty"`
+	SignalSnapshot  map[string]interface{} `json:"signal_snapshot,omitempty"`
 }
 
 type Lesson struct {
-	ID              int64   `json:"id"`
-	Rule            string  `json:"rule"`
+	ID              int64    `json:"id"`
+	Rule            string   `json:"rule"`
 	Tags            []string `json:"tags"`
-	Outcome         string  `json:"outcome"`
-	SourceType      string  `json:"sourceType"`
-	Confidence      float64 `json:"confidence,omitempty"`
-	Context         string  `json:"context,omitempty"`
-	PnlPct          float64 `json:"pnl_pct,omitempty"`
-	FeesEarnedUsd   float64 `json:"fees_earned_usd,omitempty"`
-	InitialValueUsd float64 `json:"initial_value_usd,omitempty"`
-	RangeEfficiency float64 `json:"range_efficiency,omitempty"`
-	CloseReason     string  `json:"close_reason,omitempty"`
-	Pool            string  `json:"pool,omitempty"`
-	CreatedAt       string  `json:"created_at"`
-	Pinned          bool    `json:"pinned,omitempty"`
-	Role            string  `json:"role,omitempty"`
+	Outcome         string   `json:"outcome"`
+	SourceType      string   `json:"sourceType"`
+	Confidence      float64  `json:"confidence,omitempty"`
+	Context         string   `json:"context,omitempty"`
+	PnlPct          float64  `json:"pnl_pct,omitempty"`
+	FeesEarnedUsd   float64  `json:"fees_earned_usd,omitempty"`
+	InitialValueUsd float64  `json:"initial_value_usd,omitempty"`
+	RangeEfficiency float64  `json:"range_efficiency,omitempty"`
+	CloseReason     string   `json:"close_reason,omitempty"`
+	Pool            string   `json:"pool,omitempty"`
+	CreatedAt       string   `json:"created_at"`
+	Pinned          bool     `json:"pinned,omitempty"`
+	Role            string   `json:"role,omitempty"`
 }
 
 type LessonsData struct {
@@ -152,7 +152,7 @@ func RecordPerformance(perf PerformanceRecord) {
 		return
 	}
 
-	perf.PnlUsd = math.Round(pnlUsd*100) / 100
+	perf.PnlUsd = math.Round(pnlUsd*10000) / 10000
 	perf.PnlPct = math.Round(pnlPct*100) / 100
 	perf.RangeEfficiency = math.Round(rangeEfficiency*10) / 10
 	perf.RecordedAt = time.Now().UTC().Format(time.RFC3339)
@@ -457,12 +457,12 @@ func evolveThresholds(perfData []PerformanceRecord, cfg *config.Config) {
 }
 
 type PerformanceSummary struct {
-	TotalPositionsClosed int     `json:"total_positions_closed"`
-	TotalPnlUsd          float64 `json:"total_pnl_usd"`
-	AvgPnlPct            float64 `json:"avg_pnl_pct"`
+	TotalPositionsClosed  int     `json:"total_positions_closed"`
+	TotalPnlUsd           float64 `json:"total_pnl_usd"`
+	AvgPnlPct             float64 `json:"avg_pnl_pct"`
 	AvgRangeEfficiencyPct float64 `json:"avg_range_efficiency_pct"`
-	WinRatePct           int     `json:"win_rate_pct"`
-	TotalLessons         int     `json:"total_lessons"`
+	WinRatePct            int     `json:"win_rate_pct"`
+	TotalLessons          int     `json:"total_lessons"`
 }
 
 func GetPerformanceSummary() *PerformanceSummary {
@@ -483,11 +483,11 @@ func GetPerformanceSummary() *PerformanceSummary {
 	}
 
 	return &PerformanceSummary{
-		TotalPositionsClosed: len(ld.Performance),
-		TotalPnlUsd:          math.Round(totalPnl*100) / 100,
-		AvgPnlPct:            math.Round((sumPnlPct/float64(len(ld.Performance)))*100) / 100,
+		TotalPositionsClosed:  len(ld.Performance),
+		TotalPnlUsd:           math.Round(totalPnl*10000) / 10000,
+		AvgPnlPct:             math.Round((sumPnlPct/float64(len(ld.Performance)))*100) / 100,
 		AvgRangeEfficiencyPct: math.Round((sumEff/float64(len(ld.Performance)))*10) / 10,
-		WinRatePct:           int((float64(wins) / float64(len(ld.Performance))) * 100),
-		TotalLessons:         len(ld.Lessons),
+		WinRatePct:            int((float64(wins) / float64(len(ld.Performance))) * 100),
+		TotalLessons:          len(ld.Lessons),
 	}
 }

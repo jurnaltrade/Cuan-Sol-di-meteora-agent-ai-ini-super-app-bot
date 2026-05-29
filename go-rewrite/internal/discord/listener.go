@@ -75,7 +75,7 @@ func saveSignal(record DiscordSignal) {
 	if err == nil {
 		json.Unmarshal(data, &sigs)
 	}
-	
+
 	sigs = append([]DiscordSignal{record}, sigs...)
 	if len(sigs) > 100 {
 		sigs = sigs[:100]

@@ -13,22 +13,22 @@ import (
 )
 
 type Position struct {
-	Position         string  `json:"position"`
-	Pool             string  `json:"pool"`
-	Pair             string  `json:"pair"`
-	LowerBin         int     `json:"lower_bin"`
-	UpperBin         int     `json:"upper_bin"`
-	PnLUSD           float64 `json:"pnl_usd"`
-	PnLPct           float64 `json:"pnl_pct"`
-	InRange          bool    `json:"in_range"`
-	UnclaimedFeesUSD float64 `json:"unclaimed_fees_usd"`
-	TotalValueUSD      float64  `json:"total_value_usd"`
-	CollectedFeesUSD   float64  `json:"collected_fees_usd"`
-	AgeMinutes         *int     `json:"age_minutes"`
-	ActiveBin          *int     `json:"active_bin"`
-	MinutesOutOfRange  *int     `json:"minutes_out_of_range"`
-	Instruction        *string  `json:"instruction"`
-	FeePerTvl24h       *float64 `json:"fee_per_tvl_24h"`
+	Position          string   `json:"position"`
+	Pool              string   `json:"pool"`
+	Pair              string   `json:"pair"`
+	LowerBin          int      `json:"lower_bin"`
+	UpperBin          int      `json:"upper_bin"`
+	PnLUSD            float64  `json:"pnl_usd"`
+	PnLPct            float64  `json:"pnl_pct"`
+	InRange           bool     `json:"in_range"`
+	UnclaimedFeesUSD  float64  `json:"unclaimed_fees_usd"`
+	TotalValueUSD     float64  `json:"total_value_usd"`
+	CollectedFeesUSD  float64  `json:"collected_fees_usd"`
+	AgeMinutes        *int     `json:"age_minutes"`
+	ActiveBin         *int     `json:"active_bin"`
+	MinutesOutOfRange *int     `json:"minutes_out_of_range"`
+	Instruction       *string  `json:"instruction"`
+	FeePerTvl24h      *float64 `json:"fee_per_tvl_24h"`
 }
 
 type GetMyPositionsResult struct {
