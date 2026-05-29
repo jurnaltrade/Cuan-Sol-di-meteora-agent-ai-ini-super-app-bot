@@ -1,12 +1,14 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
 	"meridian-go-rewrite/internal/api"
 	"meridian-go-rewrite/internal/config"
+	"meridian-go-rewrite/internal/logger"
 	"meridian-go-rewrite/internal/registry"
 	"meridian-go-rewrite/internal/screening"
 	"meridian-go-rewrite/internal/signal"
@@ -325,6 +327,36 @@ func execClose(args map[string]any, cfg *config.Config) any {
 	}
 
 	if result.Success {
+		// Auto-swap base token back to SOL unless user said to hold or skip_swap is true
+		if !skipSwap && result.BaseMint != "" {
+			if balances, err := solana.GetHeliusBalances(ToolWalletAddr, cfg.Tokens.SOL, cfg.Tokens.USDC); err == nil {
+				var tokenToSwap *solana.TokenBalance
+				for _, t := range balances.Tokens {
+					if t.Mint == result.BaseMint {
+						tokenToSwap = &t
+						break
+					}
+				}
+				if tokenToSwap != nil && tokenToSwap.USD >= 0.10 {
+					logger.Log("executor", fmt.Sprintf("Auto-swapping %s ($%.2f) back to SOL", tokenToSwap.Symbol, tokenToSwap.USD))
+					swapRes, err := dlmm.SwapToken(result.BaseMint, "SOL", tokenToSwap.Balance, cfg)
+					if err == nil && swapRes.Success {
+						result.AutoSwapped = true
+						result.AutoSwapNote = fmt.Sprintf("Base token already auto-swapped back to SOL (%s -> SOL). Do NOT call swap_token again.", tokenToSwap.Symbol)
+						result.SolReceived = swapRes.AmountOut
+					} else {
+						errMsg := ""
+						if err != nil {
+							errMsg = err.Error()
+						} else {
+							errMsg = swapRes.Error
+						}
+						logger.Warn("executor", fmt.Sprintf("Auto-swap after close failed: %s", errMsg))
+					}
+				}
+			}
+		}
+
 		var bal float64
 		if balances, err := solana.GetHeliusBalances(ToolWalletAddr, cfg.Tokens.SOL, cfg.Tokens.USDC); err == nil {
 			bal = balances.SOL
@@ -371,19 +403,20 @@ func execSwap(args map[string]any, cfg *config.Config) map[string]any {
 	if inputMint == "" || outputMint == "" || amount <= 0 {
 		return map[string]any{"success": false, "error": "input_mint, output_mint, and amount required"}
 	}
-	order, err := jupiter.CreateSwapOrder(inputMint, outputMint, ToolWalletAddr, amount, cfg)
+	res, err := dlmm.SwapToken(inputMint, outputMint, amount, cfg)
 	if err != nil {
 		return map[string]any{"success": false, "error": err.Error()}
 	}
-	if order.Transaction == "" {
-		return map[string]any{"success": false, "error": "no transaction in swap order", "request_id": order.RequestID}
+	if !res.Success {
+		return map[string]any{"success": false, "error": res.Error}
 	}
 	return map[string]any{
-		"success":    true,
-		"tx_base64":  order.Transaction,
-		"request_id": order.RequestID,
-		"fee_bps":    order.FeeBps,
-		"note":       "transaction ready — manual signing required for live mode",
+		"success":     true,
+		"tx":          res.Tx,
+		"input_mint":  res.InputMint,
+		"output_mint": res.OutputMint,
+		"amount_in":   res.AmountIn,
+		"amount_out":  res.AmountOut,
 	}
 }
 

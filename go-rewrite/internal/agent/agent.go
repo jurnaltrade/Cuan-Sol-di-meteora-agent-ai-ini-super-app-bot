@@ -144,6 +144,22 @@ func AgentLoop(goal string, maxSteps int, sessionHistory []openai.ChatCompletion
 				messages = messages[:len(messages)-1]
 				continue
 			}
+			// Hallucination Guard for SCREENER
+			if agentType == "SCREENER" && strings.Contains(msg.Content, "🚀 DEPLOYED") && !firedOnce["deploy_position"] {
+				messages = append(messages, openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: "ERROR: You reported a successful deployment (🚀 DEPLOYED) but did NOT call the 'deploy_position' tool. You must call the 'deploy_position' tool to execute the deployment on-chain. Please call 'deploy_position' now or explain why you cannot.",
+				})
+				continue
+			}
+			// Hallucination Guard for MANAGER close actions
+			if agentType == "MANAGER" && strings.Contains(msg.Content, "Closed") && !firedOnce["close_position"] {
+				messages = append(messages, openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: "ERROR: You reported a successful close (Closed) but did NOT call the 'close_position' tool. You must call the 'close_position' tool to execute the close on-chain. Please call 'close_position' now or explain why you cannot.",
+				})
+				continue
+			}
 			return &LoopResult{Content: msg.Content}, nil
 		}
 

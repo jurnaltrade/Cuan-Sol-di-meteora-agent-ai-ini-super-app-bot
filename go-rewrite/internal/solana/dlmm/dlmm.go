@@ -84,6 +84,43 @@ func execNodeScript(funcName string, args map[string]any) ([]byte, error) {
 	return out, nil
 }
 
+func execWalletScript(funcName string, args map[string]any) ([]byte, error) {
+	script := fmt.Sprintf(`
+		import { %s } from '../tools/wallet.js';
+		const args = JSON.parse(process.argv[1]);
+		%s(args).then(res => { console.log(JSON.stringify(res)); process.exit(0); }).catch(err => { console.error(err.message); process.exit(1); });
+	`, funcName, funcName)
+
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "node", "--no-warnings", "--experimental-modules", "-e", script, string(argsJSON))
+	cmd.Dir = filepath.Join("..", "go-rewrite") // adjust if needed
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("node command timed out after 45s: %w", err)
+		}
+		return nil, fmt.Errorf("node error: %s", string(out))
+	}
+
+	// Filter out console log prefix/lines that are not JSON
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "{\"") && strings.HasSuffix(trimmed, "}") {
+			return []byte(trimmed), nil
+		}
+	}
+
+	return out, nil
+}
+
 func (c *Client) GetMyPositions(includeStandard bool) (*GetMyPositionsResult, error) {
 	out, err := execNodeScript("getMyPositions", map[string]any{"include_standard": includeStandard})
 	if err != nil {
@@ -173,13 +210,17 @@ func DeployPosition(input DeployInput, cfg *config.Config) (*DeployResult, error
 }
 
 type CloseResult struct {
-	Success  bool    `json:"success"`
-	Error    string  `json:"error,omitempty"`
-	Pool     string  `json:"pool,omitempty"`
-	PoolName string  `json:"pool_name,omitempty"`
-	Position string  `json:"position,omitempty"`
-	PnLPct   float64 `json:"pnl_pct"`
-	PnLUSD   float64 `json:"pnl_usd"`
+	Success      bool    `json:"success"`
+	Error        string  `json:"error,omitempty"`
+	Pool         string  `json:"pool,omitempty"`
+	PoolName     string  `json:"pool_name,omitempty"`
+	Position     string  `json:"position,omitempty"`
+	PnLPct       float64 `json:"pnl_pct"`
+	PnLUSD       float64 `json:"pnl_usd"`
+	BaseMint     string  `json:"base_mint,omitempty"`
+	AutoSwapped  bool    `json:"auto_swapped,omitempty"`
+	AutoSwapNote string  `json:"auto_swap_note,omitempty"`
+	SolReceived  string  `json:"sol_received,omitempty"`
 }
 
 func ClosePosition(addr string, reason string, skipSwap bool, cfg *config.Config) (*CloseResult, error) {
@@ -218,4 +259,30 @@ func SearchPools(query string, limit int) ([]map[string]any, error) {
 		return nil, err
 	}
 	return res.Pools, nil
+}
+
+type SwapResult struct {
+	Success    bool   `json:"success"`
+	Error      string `json:"error,omitempty"`
+	Tx         string `json:"tx,omitempty"`
+	InputMint  string `json:"input_mint,omitempty"`
+	OutputMint string `json:"output_mint,omitempty"`
+	AmountIn   string `json:"amount_in,omitempty"`
+	AmountOut  string `json:"amount_out,omitempty"`
+}
+
+func SwapToken(inputMint, outputMint string, amount float64, cfg *config.Config) (*SwapResult, error) {
+	out, err := execWalletScript("swapToken", map[string]any{
+		"input_mint":  inputMint,
+		"output_mint": outputMint,
+		"amount":      amount,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var res SwapResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
 }
