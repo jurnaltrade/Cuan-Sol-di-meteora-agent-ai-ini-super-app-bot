@@ -89,8 +89,8 @@ func handleTelegramMessage(cfg *config.Config, msg *tgbotapi.Message) {
 				"• <b>/closeall</b> — close all open positions\n" +
 				"• <b>/set &lt;n&gt; &lt;note&gt;</b> — set note/instruction on position\n" +
 				"• <b>/config</b> — show important runtime config\n" +
-				"• <b>/settings</b> — button menu for common config\n" +
-				"• <b>/setcfg &lt;key&gt; &lt;value&gt;</b> — update persisted config\n" +
+				"• <b>/settings</b> — view all config keys &amp; current values\n" +
+				"• <b>/setcfg &lt;key&gt; &lt;value&gt;</b> — update config (use '/setcfg' or '/setcfg help' to see all valid keys)\n" +
 				"• <b>/screen</b> — refresh deterministic candidate list\n" +
 				"• <b>/candidates</b> — show latest cached candidates\n" +
 				"• <b>/deploy &lt;n&gt;</b> — deploy candidate by cached index\n" +
@@ -431,25 +431,52 @@ func handleTelegramMessage(cfg *config.Config, msg *tgbotapi.Message) {
 			settingsMsg := "⚙️ <b>Meridian Settings</b> ⚙️\n\n" +
 				"You can update any of these configuration settings using the command:\n" +
 				"<code>/setcfg &lt;key&gt; &lt;value&gt;</code>\n\n" +
-				"<b>Common Config Keys &amp; Current Values:</b>\n" +
+				"<b>All Config Keys &amp; Current Values:</b>\n" +
 				fmt.Sprintf("• <code>strategy</code>: <code>%s</code>\n", cfg.Strategy.Strategy) +
 				fmt.Sprintf("• <code>minBinsBelow</code>: <code>%d</code>\n", cfg.Strategy.MinBinsBelow) +
 				fmt.Sprintf("• <code>maxBinsBelow</code>: <code>%d</code>\n", cfg.Strategy.MaxBinsBelow) +
 				fmt.Sprintf("• <code>defaultBinsBelow</code>: <code>%d</code>\n", cfg.Strategy.DefaultBinsBelow) +
 				fmt.Sprintf("• <code>deployAmountSol</code>: <code>%.4f</code>\n", cfg.Management.DeployAmountSol) +
+				fmt.Sprintf("• <code>maxDeployAmount</code>: <code>%.4f</code>\n", cfg.Risk.MaxDeployAmount) +
+				fmt.Sprintf("• <code>minSolToOpen</code>: <code>%.4f</code>\n", cfg.Management.MinSolToOpen) +
+				fmt.Sprintf("• <code>gasReserve</code>: <code>%.4f</code>\n", cfg.Management.GasReserve) +
+				fmt.Sprintf("• <code>positionSizePct</code>: <code>%.2f</code> (%.0f%%)\n", cfg.Management.PositionSizePct, cfg.Management.PositionSizePct*100) +
 				fmt.Sprintf("• <code>maxPositions</code>: <code>%d</code>\n", cfg.Risk.MaxPositions) +
+				fmt.Sprintf("• <code>minTvl</code>: <code>%.0f</code>\n", cfg.Screening.MinTvl) +
+				fmt.Sprintf("• <code>maxTvl</code>: <code>%.0f</code>\n", cfg.Screening.MaxTvl) +
 				fmt.Sprintf("• <code>stopLossPct</code>: <code>%.1f</code>\n", cfg.Management.StopLossPct) +
 				fmt.Sprintf("• <code>takeProfitPct</code>: <code>%.1f</code>\n", cfg.Management.TakeProfitPct) +
 				fmt.Sprintf("• <code>managementIntervalMin</code>: <code>%d</code>\n", cfg.Schedule.ManagementIntervalMin) +
 				fmt.Sprintf("• <code>screeningIntervalMin</code>: <code>%d</code>\n", cfg.Schedule.ScreeningIntervalMin) +
 				fmt.Sprintf("• <code>dryRun</code>: <code>%t</code>\n\n", cfg.DryRun) +
-				"<b>Example:</b> <code>/setcfg stopLossPct -10</code>"
+				"<b>Example:</b> <code>/setcfg deployAmountSol 0.35</code>"
 			telegram.SendHTMLToChat(msg.Chat.ID, settingsMsg)
 
 		case "/setcfg":
 			parts := strings.SplitN(text, " ", 3)
-			if len(parts) < 3 {
-				telegram.SendMessageToChat(msg.Chat.ID, "❌ Usage: /setcfg <key> <value>")
+			if len(parts) < 3 || parts[1] == "help" || parts[1] == "?" {
+				settingsMsg := "⚙️ <b>Meridian /setcfg Help</b> ⚙️\n\n" +
+					"Use <code>/setcfg &lt;key&gt; &lt;value&gt;</code> to update configurations.\n\n" +
+					"<b>Valid Config Keys:</b>\n" +
+					"• <code>strategy</code> (string)\n" +
+					"• <code>minBinsBelow</code> (int)\n" +
+					"• <code>maxBinsBelow</code> (int)\n" +
+					"• <code>defaultBinsBelow</code> (int)\n" +
+					"• <code>deployAmountSol</code> (float)\n" +
+					"• <code>maxDeployAmount</code> (float)\n" +
+					"• <code>minSolToOpen</code> (float)\n" +
+					"• <code>gasReserve</code> (float)\n" +
+					"• <code>positionSizePct</code> (float, 0.0 to 1.0)\n" +
+					"• <code>maxPositions</code> (int)\n" +
+					"• <code>minTvl</code> (float)\n" +
+					"• <code>maxTvl</code> (float)\n" +
+					"• <code>stopLossPct</code> (float, e.g. -50)\n" +
+					"• <code>takeProfitPct</code> (float, e.g. 5)\n" +
+					"• <code>managementIntervalMin</code> (int)\n" +
+					"• <code>screeningIntervalMin</code> (int)\n" +
+					"• <code>dryRun</code> (bool, true/false)\n\n" +
+					"<i>To view current settings, use the <code>/settings</code> command.</i>"
+				telegram.SendHTMLToChat(msg.Chat.ID, settingsMsg)
 				return
 			}
 			key := parts[1]
@@ -770,6 +797,42 @@ func updateConfigValue(cfg *config.Config, key string, valStr string) error {
 			return err
 		}
 		cfg.Management.DeployAmountSol = v
+	case "maxdeployamount":
+		var v float64
+		if _, err := fmt.Sscanf(valStr, "%f", &v); err != nil {
+			return err
+		}
+		cfg.Risk.MaxDeployAmount = v
+	case "mintvl":
+		var v float64
+		if _, err := fmt.Sscanf(valStr, "%f", &v); err != nil {
+			return err
+		}
+		cfg.Screening.MinTvl = v
+	case "maxtvl":
+		var v float64
+		if _, err := fmt.Sscanf(valStr, "%f", &v); err != nil {
+			return err
+		}
+		cfg.Screening.MaxTvl = v
+	case "minsoltoopen":
+		var v float64
+		if _, err := fmt.Sscanf(valStr, "%f", &v); err != nil {
+			return err
+		}
+		cfg.Management.MinSolToOpen = v
+	case "gasreserve":
+		var v float64
+		if _, err := fmt.Sscanf(valStr, "%f", &v); err != nil {
+			return err
+		}
+		cfg.Management.GasReserve = v
+	case "positionsizepct":
+		var v float64
+		if _, err := fmt.Sscanf(valStr, "%f", &v); err != nil {
+			return err
+		}
+		cfg.Management.PositionSizePct = v
 	case "maxpositions":
 		var v int
 		if _, err := fmt.Sscanf(valStr, "%d", &v); err != nil {
