@@ -2,7 +2,9 @@ package telegram
 
 import (
 	"fmt"
+	"html"
 	"log"
+	"regexp"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -155,12 +157,27 @@ type LiveMessage struct {
 	footer    string
 }
 
+var (
+	boldRegex   = regexp.MustCompile(`\*\*(.*?)\*\*`)
+	italicRegex = regexp.MustCompile(`\*(.*?)\*`)
+	codeRegex   = regexp.MustCompile("`(.*?)`")
+)
+
+func parseMarkdownToHTML(text string) string {
+	escaped := html.EscapeString(text)
+	escaped = boldRegex.ReplaceAllString(escaped, "<b>$1</b>")
+	escaped = italicRegex.ReplaceAllString(escaped, "<i>$1</i>")
+	escaped = codeRegex.ReplaceAllString(escaped, "<code>$1</code>")
+	return escaped
+}
+
 func CreateLiveMessage(title, intro string) (*LiveMessage, error) {
 	if bot == nil || chatID == 0 {
 		return nil, nil
 	}
-	text := title + "\n\n" + intro
+	text := title + "\n\n" + html.EscapeString(intro)
 	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "HTML"
 	sent, err := bot.Send(msg)
 	if err != nil {
 		return nil, err
@@ -218,12 +235,12 @@ func (lm *LiveMessage) ToolFinish(name string, result any, success bool) {
 }
 
 func (lm *LiveMessage) Finalize(text string) error {
-	lm.footer = text
+	lm.footer = parseMarkdownToHTML(text)
 	return lm.flush()
 }
 
 func (lm *LiveMessage) Fail(text string) error {
-	lm.footer = "❌ " + text
+	lm.footer = "❌ " + html.EscapeString(text)
 	return lm.flush()
 }
 
@@ -233,7 +250,11 @@ func (lm *LiveMessage) flush() error {
 	}
 	parts := []string{lm.title}
 	if len(lm.toolLines) > 0 {
-		parts = append(parts, strings.Join(lm.toolLines, "\n"))
+		var escapedTools []string
+		for _, line := range lm.toolLines {
+			escapedTools = append(escapedTools, html.EscapeString(line))
+		}
+		parts = append(parts, strings.Join(escapedTools, "\n"))
 	}
 	if lm.footer != "" {
 		parts = append(parts, lm.footer)
@@ -241,12 +262,13 @@ func (lm *LiveMessage) flush() error {
 	text := strings.Join(parts, "\n\n")
 	text = truncate(text, 4096)
 	msg := tgbotapi.NewEditMessageText(lm.chatID, lm.msgID, text)
+	msg.ParseMode = "HTML"
 	_, err := lm.bot.Send(msg)
 	return err
 }
 
 func (lm *LiveMessage) Note(text string) {
-	lm.toolLines = append(lm.toolLines, text)
+	lm.toolLines = append(lm.toolLines, parseMarkdownToHTML(text))
 	lm.flush()
 }
 
