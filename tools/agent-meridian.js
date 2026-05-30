@@ -23,6 +23,16 @@ function isRetryableStatus(status) {
   return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
 
+function isTimeoutError(error) {
+  // AbortError from fetchWithTimeout has no HTTP status; treat per-attempt
+  // timeouts as retryable so the maxElapsedMs budget is actually used.
+  const name = error?.name || "";
+  const message = String(error?.message || "");
+  return name === "AbortError"
+    || name === "TimeoutError"
+    || /aborted|timed? ?out/i.test(message);
+}
+
 function retryDelayMs(error, attempt) {
   const retryAfter = Number(error?.retryAfter);
   if (Number.isFinite(retryAfter) && retryAfter > 0) {
@@ -96,7 +106,8 @@ export async function agentMeridianJson(pathname, options = {}) {
     } catch (error) {
       lastError = error;
       const status = Number(error?.status || 0);
-      if (!isRetryableStatus(status) || attempt >= maxAttempts - 1) {
+      const retryable = isRetryableStatus(status) || isTimeoutError(error);
+      if (!retryable || attempt >= maxAttempts - 1) {
         throw error;
       }
       const waitMs = Math.min(retryDelayMs(error, attempt), Math.max(0, remainingMs - 1));
