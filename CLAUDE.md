@@ -90,7 +90,7 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 | outOfRangeWaitMinutes | management | 30 |
 | managementIntervalMin | schedule | 10 |
 | screeningIntervalMin | schedule | 30 |
-| managementModel / screeningModel / generalModel | llm | openrouter/healer-alpha |
+| managementModel / screeningModel / generalModel | llm | claude-opus-4-7 |
 
 **`computeDeployAmount(walletSol)`** — scales position size with wallet balance (compounding). Formula: `clamp(deployable × positionSizePct, floor=deployAmountSol, ceil=maxDeployAmount)`.
 
@@ -180,8 +180,9 @@ const actualBaseFee = baseFactor > 0
 
 ## Model Configuration
 
-- Default model: `process.env.LLM_MODEL` or `openrouter/healer-alpha`
-- Fallback on 502/503/529: `stepfun/step-3.5-flash:free` (2nd attempt), then retry
+- Default base URL: `process.env.LLM_BASE_URL` or `https://api.anthropic.com/v1` (Anthropic's OpenAI-compatible endpoint)
+- Default model: `process.env.LLM_MODEL` or `claude-opus-4-7` — must be a real model on the configured endpoint (verify via `GET /v1/models`); `openrouter/*` and `minimax/*` names 404 against the Anthropic endpoint
+- Fallback on 502/503/529: `claude-haiku-4-5-20251001` (2nd attempt), then retry
 - Per-role models: `managementModel`, `screeningModel`, `generalModel` in user-config.json
 - LM Studio: set `LLM_BASE_URL=http://localhost:1234/v1` and `LLM_API_KEY=lm-studio`
 - `maxOutputTokens` minimum: 2048 (free models may have lower limits causing empty responses)
@@ -210,7 +211,7 @@ Agent Meridian HiveMind sync is handled by `hivemind.js`. It uses built-in Agent
 |-----|----------|---------|
 | `WALLET_PRIVATE_KEY` | Yes | Base58 or JSON array private key |
 | `RPC_URL` | Yes | Solana RPC endpoint |
-| `OPENROUTER_API_KEY` | Yes | LLM API key |
+| `OPENROUTER_API_KEY` | No | Legacy fallback for the LLM API key (used only if `LLM_API_KEY` unset). Live setup supplies the key (Anthropic `sk-ant-...`) via `llmApiKey` in user-config.json, not env |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram notifications |
 | `TELEGRAM_CHAT_ID` | No | Telegram chat target |
 | `LLM_BASE_URL` | No | Override for local LLM (e.g. LM Studio) |
