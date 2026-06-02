@@ -124,6 +124,13 @@ function getRawPoolScreeningRejectReason(pool, s) {
   if (quoteOrganic == null || quoteOrganic < s.minQuoteOrganic) {
     return `quote organic ${quoteOrganic ?? "unknown"} below minQuoteOrganic ${s.minQuoteOrganic}`;
   }
+  if (s.requireSolQuote) {
+    const SOL_MINT = "So11111111111111111111111111111111111111112";
+    const quoteMint = quote?.address || quote?.mint;
+    if (quoteMint && quoteMint !== SOL_MINT) {
+      return `quote token is not SOL (${quote?.symbol || String(quoteMint).slice(0, 8)}) — agent deploys single-side SOL only`;
+    }
+  }
   if (
     pool?.discord_signal &&
     Array.isArray(s.allowedLaunchpads) &&
@@ -781,6 +788,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
 
   return {
     candidates: eligible,
+    total_eligible: eligible.length,
     total_screened: discovery.total ?? pools.length,
     source,
     filtered_examples: filteredOut.slice(0, 3),

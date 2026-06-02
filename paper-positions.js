@@ -193,6 +193,7 @@ export async function openPaperPosition({
   lower_price,
   upper_price,
   strategy_type = "spot",
+  base_mint = null,
 }) {
   const { getBinIdFromPrice } = await getDLMMHelpers();
   const poolCfg = await fetchPoolConfig(pool_address);
@@ -228,6 +229,7 @@ export async function openPaperPosition({
   const position = {
     id,
     pool_address,
+    base_mint,
     pool_name:    name || pool_address.slice(0, 8),
     pair:         `${tokenXSymbol}-${tokenYSymbol}`,
     deposit_amount,
@@ -453,6 +455,7 @@ function formatSummary(pos) {
     id:            pos.id,
     pool:          pos.pool_name,
     pool_address:  pos.pool_address,
+    base_mint:     pos.base_mint ?? null,
     pair:          pos.pair,
     status:        pos.status,
     close_reason:  pos.close_reason ?? null,

@@ -88,6 +88,7 @@ export const config = {
     minVolume:         u.minVolume         ?? 500,
     minOrganic:        u.minOrganic        ?? 60,
     minQuoteOrganic:   u.minQuoteOrganic   ?? 60,
+    requireSolQuote:   u.requireSolQuote   ?? true,  // only SOL-quoted pools (agent deploys single-side SOL)
     minHolders:        u.minHolders        ?? 500,
     minMcap:           u.minMcap           ?? 150_000,
     maxMcap:           u.maxMcap           ?? 10_000_000,

@@ -639,8 +639,9 @@ export async function executeTool(name, args) {
             const openPaper = ((await list_paper_positions()) || []).filter((p) => p.status === "open");
             const atMax = openPaper.length >= config.risk.maxPositions;
             const dupPool = openPaper.some((p) => p.pool_address === wd.pool_address);
-            if (atMax || dupPool) {
-              log("paper_sim", `Skip paper open for ${String(wd.pool_address).slice(0, 8)}: ${atMax ? "max positions" : "duplicate pool"}`);
+            const dupMint = wd.base_mint && openPaper.some((p) => p.base_mint && p.base_mint === wd.base_mint);
+            if (atMax || dupPool || dupMint) {
+              log("paper_sim", `Skip paper open for ${String(wd.pool_address).slice(0, 8)}: ${atMax ? "max positions" : dupPool ? "duplicate pool" : "duplicate base token"}`);
             } else {
               const bal = await getWalletBalances().catch(() => ({ sol_price: 80 }));
               const depositUsd = Number(((wd.amount_y ?? 0) * (bal.sol_price || 80)).toFixed(2));
@@ -651,6 +652,7 @@ export async function executeTool(name, args) {
                   lower_price: wd.lower_price,
                   upper_price: wd.upper_price,
                   strategy_type: wd.strategy,
+                  base_mint: wd.base_mint,
                 });
                 log("paper_sim", `Bridged dry-run deploy -> paper position ${paper?.id || "?"} ($${depositUsd})`);
               }
