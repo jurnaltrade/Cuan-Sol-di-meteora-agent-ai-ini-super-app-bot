@@ -25,7 +25,7 @@ import {
 } from "../state.js";
 import { recordPerformance } from "../lessons.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
-import { normalizeMint } from "./wallet.js";
+import { normalizeMint, swapToken, getWalletBalances } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
 import { getAndClearStagedSignals } from "../signal-tracker.js";
 
@@ -570,6 +570,7 @@ export async function deployPosition({
   bins_above,
   downside_pct,
   upside_pct,
+  auto_swap, // boolean: if true and deploying SOL-only, swap 50% SOL to token for dual-sided deploy
   // optional pool metadata for learning (passed by agent when available)
   pool_name,
   bin_step,
@@ -632,25 +633,44 @@ export async function deployPosition({
     amount_y == null && amount_sol == null
       ? computeDeployAmount((await getWalletBalances()).sol)
       : 0;
-  const finalAmountY = Number(amount_y ?? amount_sol ?? fallbackAmountY);
-  const finalAmountX = Number(amount_x ?? 0);
+  let finalAmountY = Number(amount_y ?? amount_sol ?? fallbackAmountY);
+  let finalAmountX = Number(amount_x ?? 0);
   if (!Number.isFinite(finalAmountY) || !Number.isFinite(finalAmountX) || finalAmountY < 0 || finalAmountX < 0) {
     throw new Error("Invalid deploy amount: amount_x and amount_y must be valid non-negative numbers.");
   }
-  if (finalAmountX > 0) {
-    throw new Error("Unsupported deploy amount: this agent only supports single-side SOL deploys. Use amount_y/amount_sol and keep amount_x=0.");
-  }
-  if (finalAmountY <= 0) {
-    throw new Error("Invalid deploy amount: provide a positive amount_y/amount_sol.");
+  if (finalAmountY <= 0 && finalAmountX <= 0) {
+    throw new Error("Invalid deploy amount: provide a positive amount_y/amount_sol or amount_x.");
   }
   const isSingleSidedSol = finalAmountX <= 0 && finalAmountY > 0;
-  if (isSingleSidedSol && (Number(bins_above ?? 0) > 0 || Number(upside_pct ?? 0) > 0)) {
-    throw new Error(
-      "Single-side SOL deploy cannot use bins_above or upside_pct. Use amount_y with bins_below only; the upper bin is the SDK active bin.",
-    );
-  }
-  if (isSingleSidedSol) {
-    activeBinsAbove = 0;
+
+  // Auto-swap: when explicitly requested and deploying SOL-only, swap 50% SOL to token for dual-sided deploy
+  if (auto_swap && isSingleSidedSol && Number(activeBinsAbove ?? 0) > 0) {
+    const swapAmount = finalAmountY * 0.5;
+    const baseMintAddr = pool.lbPair.tokenXMint.toString();
+    log("deploy", `Auto-swap: ${swapAmount.toFixed(6)} SOL → token ${baseMintAddr.slice(0, 8)} for dual-sided bid-ask`);
+    try {
+      const swapResult = await swapToken({
+        input_mint: config.tokens.SOL,
+        output_mint: baseMintAddr,
+        amount: swapAmount,
+      });
+      if (swapResult.dry_run) {
+        log("deploy", `Auto-swap DRY RUN — would swap ${swapAmount} SOL to token`);
+        finalAmountY = swapAmount;
+        finalAmountX = swapAmount; // approximate for dry run
+      } else if (swapResult.success) {
+        const tokenReceived = Number(swapResult.amount_out) || 0;
+        log("deploy", `Auto-swap complete: ${swapAmount.toFixed(6)} SOL → ${tokenReceived} tokens (tx: ${swapResult.tx})`);
+        finalAmountY = swapAmount;
+        finalAmountX = tokenReceived > 0 ? tokenReceived : swapAmount; // use actual amount or fallback
+      } else {
+        throw new Error(swapResult.error || "Swap returned unsuccessful");
+      }
+    } catch (swapErr) {
+      log("deploy", `Auto-swap failed: ${swapErr.message} — falling back to single-sided SOL deploy`);
+      // Fall back to single-sided: ignore bins_above
+      activeBinsAbove = 0;
+    }
   }
   activeBinsBelow = Number(activeBinsBelow);
   activeBinsAbove = Number(activeBinsAbove);

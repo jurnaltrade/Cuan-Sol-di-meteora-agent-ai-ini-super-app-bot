@@ -131,8 +131,9 @@ POOL MEMORY: Past losses or problems → strong skip signal.
 
 DEPLOY RULES:
 - COMPOUNDING: Use the deploy amount from the goal EXACTLY. Do NOT default to a smaller number.
-- strategy = ${config.strategy.strategy} — always use this exact value, never change it.
-- bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*${config.strategy.maxBinsBelow - config.strategy.minBinsBelow}) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}]. bins_above = 0.
+- strategy = bid_ask — always use bid_ask for the active strategy.
+- APE-IN MODE: Use fixed bins — bins_below=49, bins_above=20, auto_swap=true. Deploy tool will auto-swap 50% SOL to token for dual-sided placement.
+- If volatility is extreme (>8), you may narrow to bins_below=35, bins_above=14 (total=49) for safety.
 - Bin steps must be [${config.screening.minBinStep}-${config.screening.maxBinStep}].
 - Pick ONE pool only if it qualifies. Otherwise explain why none qualify.
 

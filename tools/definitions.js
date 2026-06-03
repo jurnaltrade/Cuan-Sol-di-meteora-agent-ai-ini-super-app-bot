@@ -137,13 +137,13 @@ HARD RULES:
 - Never use 'curve'.
 - Bin Step: Only deploy in pools with bin_step between 80 and 125.
 - Range: Never deploy a tiny range. Total bins must be at least the configured minimum, with a hard floor of 35 bins.
-- For single-side SOL deploys (amount_y only, amount_x=0), do not request upside exposure:
-  use bins_below only, keep bins_above=0, and the upper bin will be pinned to the current active bin.
+- For Ape-in strategy, use strategy="bid_ask" with bins_below=49, bins_above=20, and auto_swap=true.
+- For standard single-side SOL deploys (amount_y only, amount_x=0), keep bins_above=0.
 
 Guidelines (only when user hasn't specified):
 - Strategy: use the active strategy's lp_strategy field (bid_ask or spot)
 - Bins: choose 35–69 for standard volatility; up to 350 for wide-range strategies. Max 1400 total.
-- Deposit: single-sided SOL only. Use amount_y/amount_sol and keep amount_x=0.
+- Deposit: single-sided SOL preferred. Use amount_y/amount_sol and keep amount_x=0. For dual-sided strategies, use auto_swap=true.
 
 WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
       parameters: {
@@ -159,7 +159,7 @@ WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
           },
           amount_x: {
             type: "number",
-            description: "Unsupported for this agent. Keep 0; deploys must be single-side SOL via amount_y/amount_sol."
+            description: "Amount of base token to deposit. For ape-in strategy, auto-swap handles this automatically. For explicit mixed deploys, set this alongside amount_y."
           },
           amount_sol: {
             type: "number",
@@ -193,7 +193,8 @@ WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
           volatility: { type: "number", description: "Pool volatility at deploy time, sourced from max(screening timeframe, 30m)" },
           fee_tvl_ratio: { type: "number", description: "fee/TVL ratio at deploy time" },
           organic_score: { type: "number", description: "Base token organic score at deploy time" },
-          initial_value_usd: { type: "number", description: "Estimated USD value being deployed" }
+          initial_value_usd: { type: "number", description: "Estimated USD value being deployed" },
+          auto_swap: { type: "boolean", description: "If true and deploying SOL-only with bins_above > 0, auto-swaps 50% SOL to token for dual-sided placement. Use when active strategy requires both-side liquidity." }
         },
         required: ["pool_address"]
       }
