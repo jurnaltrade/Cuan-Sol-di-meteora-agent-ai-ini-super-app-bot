@@ -1121,7 +1121,11 @@ function deriveLpAgentPnlPct(lpData, solMode = false) {
 
   const currentValue = solMode ? safeNum(lpData.valueNative) : safeNum(lpData.value);
   const unclaimedFees = solMode ? safeNum(lpData.unCollectedFeeNative) : safeNum(lpData.unCollectedFee);
-  const pnl = currentValue + unclaimedFees - deposit;
+  // Realized fees already claimed out of the position. Mirrors deriveOpenPnlPct's
+  // `+ fees` term — omitting it understated PnL by exactly the claimed amount after
+  // every claim_fees, producing a constant reported-vs-derived gap (false "suspicious").
+  const collectedFees = solMode ? safeNum(lpData.collectedFeeNative) : safeNum(lpData.collectedFee);
+  const pnl = currentValue + unclaimedFees + collectedFees - deposit;
   return (pnl / deposit) * 100;
 }
 
@@ -1521,7 +1525,15 @@ export async function closePosition({ position_address, reason }) {
     const wallet = getWallet();
     const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
     const poolMeta = await getPoolMetadata(poolAddress);
-    if (shouldUseLpAgentRelay()) {
+    // Relay zap-out is disabled: the OKX zap-out order embeds a direct owner SOL
+    // transfer (wSOL wrap / fee) that assertNoUnsafeSystemTransfer rejects, so it
+    // has failed 100% of closes and always falls back to the local path below.
+    // The failed attempt (build → sign → simulate → throw) adds seconds of latency
+    // to every close, which worsens fills during fast dumps. It also requested a
+    // 50% (slippageBps 5000) OKX swap — far looser than the local Jupiter autoswap.
+    // Skip straight to the safer, working local close + Jupiter autoswap path.
+    const RELAY_ZAP_OUT_ENABLED = false;
+    if (RELAY_ZAP_OUT_ENABLED && shouldUseLpAgentRelay()) {
       let relaySubmitted = false;
       try {
       const pool = await getPool(poolAddress);
