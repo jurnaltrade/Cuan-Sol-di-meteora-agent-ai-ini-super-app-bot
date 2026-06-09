@@ -441,8 +441,11 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
     // Load active strategy
     const activeStrategy = getActiveStrategy();
-    const deployStrategy = config.strategy.strategy;
-    const strategyBlock = `DEPLOY STRATEGY: ${deployStrategy} (from config) | bins_above: 0 (FIXED — never change) | deposit: SOL only (amount_y, amount_x=0)`
+    const configStrategy = config.strategy.strategy;
+    const shapeBlock = configStrategy === "auto"
+      ? `LP shape: volatility-driven (see STEPS) — 'bid_ask' if volatility >= 4, else 'spot'`
+      : `DEPLOY STRATEGY: ${configStrategy} (from config — use exactly, do not change by volatility)`;
+    const strategyBlock = `${shapeBlock} | bins_above: ${activeStrategy?.range?.bins_above ?? 0} (FIXED — never change) | deposit: SOL only (amount_y, amount_x=0)`
       + (activeStrategy ? `\nSTRATEGY CONTEXT: ${activeStrategy.name} — entry: ${activeStrategy.entry?.condition || "n/a"} | exit: ${activeStrategy.exit?.notes || "n/a"} | best for: ${activeStrategy.best_for}` : "");
 
     // Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
@@ -606,6 +609,7 @@ STEPS:
 1. Decide if any candidate is actually worth deploying. One surviving candidate is not automatically good enough.
 2. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
 3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+   strategy = "bid_ask" if candidate volatility >= ${VOLATILITY_STRATEGY_THRESHOLD}, else "spot" (volatility-driven, overrides the active strategy's shape).
    bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*(${config.strategy.maxBinsBelow - config.strategy.minBinsBelow})) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
    pass deploy_position.volatility = the candidate volatility value.
    For single-side SOL deploys, do not invent upside:
@@ -902,6 +906,24 @@ function getDeterministicCloseRule(position, managementConfig) {
     (position.minutes_out_of_range ?? 0) >= managementConfig.outOfRangeWaitMinutes
   ) {
     return { action: "CLOSE", rule: 4, reason: "OOR" };
+  }
+  // Downside protection — symmetric to rules 3 & 4. When price DUMPS below the
+  // whole range the position is 100% in the falling base token, earns zero fees,
+  // and bleeds until the (loose) stop loss. Cut it like an upside breakout.
+  if (
+    position.active_bin != null &&
+    position.lower_bin != null &&
+    position.active_bin < position.lower_bin - managementConfig.outOfRangeBinsToClose
+  ) {
+    return { action: "CLOSE", rule: 6, reason: "dumped far below range" };
+  }
+  if (
+    position.active_bin != null &&
+    position.lower_bin != null &&
+    position.active_bin < position.lower_bin &&
+    (position.minutes_out_of_range ?? 0) >= managementConfig.outOfRangeWaitMinutes
+  ) {
+    return { action: "CLOSE", rule: 7, reason: "OOR below" };
   }
   if (
     position.fee_per_tvl_24h != null &&
@@ -1318,7 +1340,7 @@ async function deployLatestCandidate(index) {
   const result = await executeTool("deploy_position", {
     pool_address: candidate.pool,
     amount_y: deployAmount,
-    strategy: config.strategy.strategy,
+    strategy: computeStrategy(candidate.volatility),
     bins_below: binsBelow,
     bins_above: 0,
     pool_name: candidate.name,
@@ -1679,6 +1701,17 @@ function computeBinsBelow(volatility) {
   const lo = config.strategy.minBinsBelow;
   const hi = config.strategy.maxBinsBelow;
   return Math.max(lo, Math.min(hi, Math.round(lo + (parsedVolatility / 5) * (hi - lo))));
+}
+
+// Volatility-driven LP shape: bid_ask for high volatility (>= threshold), spot for low.
+// Single source of truth for both the programmatic deploy path and the screener prompt.
+const VOLATILITY_STRATEGY_THRESHOLD = 4;
+function computeStrategy(volatility) {
+  const parsedVolatility = Number(volatility);
+  if (!Number.isFinite(parsedVolatility) || parsedVolatility <= 0) {
+    throw new Error(`Invalid volatility ${volatility ?? "unknown"} — refusing volatility-scaled deploy.`);
+  }
+  return parsedVolatility >= VOLATILITY_STRATEGY_THRESHOLD ? "bid_ask" : "spot";
 }
 
 // Register restarter — when update_config changes intervals, running cron jobs get replaced

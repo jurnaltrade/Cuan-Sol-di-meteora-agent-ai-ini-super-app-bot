@@ -123,7 +123,7 @@ export const config = {
 
   // ─── Strategy Mapping ───────────────────
   strategy: {
-    strategy:     u.strategy     ?? "bid_ask",
+    strategy:     u.strategy     ?? "auto",  // "auto" = volatility-driven (bid_ask if vol>=4, else spot); or pin "bid_ask"/"spot"
     minBinsBelow: strategyMinBinsBelow,
     maxBinsBelow: strategyMaxBinsBelow,
     defaultBinsBelow: strategyDefaultBinsBelow,
@@ -141,9 +141,9 @@ export const config = {
     temperature: u.temperature ?? 0.373,
     maxTokens:   u.maxTokens   ?? 4096,
     maxSteps:    u.maxSteps    ?? 20,
-    managementModel: u.managementModel ?? process.env.LLM_MODEL ?? "openrouter/healer-alpha",
-    screeningModel:  u.screeningModel  ?? process.env.LLM_MODEL ?? "openrouter/hunter-alpha",
-    generalModel:    u.generalModel    ?? process.env.LLM_MODEL ?? "openrouter/healer-alpha",
+    managementModel: u.managementModel ?? process.env.LLM_MODEL ?? "claude-opus-4-7",
+    screeningModel:  u.screeningModel  ?? process.env.LLM_MODEL ?? "claude-opus-4-7",
+    generalModel:    u.generalModel    ?? process.env.LLM_MODEL ?? "claude-opus-4-7",
   },
 
   // ─── Darwinian Signal Weighting ───────

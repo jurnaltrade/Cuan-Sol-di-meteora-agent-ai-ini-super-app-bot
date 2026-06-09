@@ -473,7 +473,6 @@ export async function deployPosition({
   entry_holders,
 }) {
   pool_address = normalizeMint(pool_address);
-  const activeStrategy = strategy || config.strategy.strategy;
   let activeBinsBelow = bins_below ?? config.strategy.defaultBinsBelow ?? config.strategy.minBinsBelow;
   let activeBinsAbove = bins_above ?? 0;
   const parsedVolatility = volatility == null ? null : Number(volatility);
@@ -481,6 +480,13 @@ export async function deployPosition({
 
   if (volatility != null && (normalizedVolatility == null || normalizedVolatility <= 0)) {
     throw new Error(`Invalid volatility ${volatility} — refusing deploy because the volatility feed is unusable.`);
+  }
+
+  // Resolve strategy. Explicit caller arg wins; otherwise use config.strategy.strategy.
+  // "auto" means volatility-driven: bid_ask for high volatility (>= 4), else spot.
+  let activeStrategy = strategy || config.strategy.strategy;
+  if (activeStrategy === "auto") {
+    activeStrategy = (normalizedVolatility != null && normalizedVolatility >= 4) ? "bid_ask" : "spot";
   }
 
   if (isPoolOnCooldown(pool_address)) {
@@ -1134,7 +1140,11 @@ function deriveLpAgentPnlPct(lpData, solMode = false) {
 
   const currentValue = solMode ? safeNum(lpData.valueNative) : safeNum(lpData.value);
   const unclaimedFees = solMode ? safeNum(lpData.unCollectedFeeNative) : safeNum(lpData.unCollectedFee);
-  const pnl = currentValue + unclaimedFees - deposit;
+  // Realized fees already claimed out of the position. Mirrors deriveOpenPnlPct's
+  // `+ fees` term — omitting it understated PnL by exactly the claimed amount after
+  // every claim_fees, producing a constant reported-vs-derived gap (false "suspicious").
+  const collectedFees = solMode ? safeNum(lpData.collectedFeeNative) : safeNum(lpData.collectedFee);
+  const pnl = currentValue + unclaimedFees + collectedFees - deposit;
   return (pnl / deposit) * 100;
 }
 
@@ -1188,7 +1198,23 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
   const loadPositions = async () => { try {
     let relayLpAgentByPosition = null;
     let relayRequestId = null;
-    if (shouldUseLpAgentRelay()) {
+
+    // Portfolio API discovers open pools/positions for this wallet.
+    // Detailed range data stays on Meteora PnL API; value/PnL can be overridden by LPAgent below.
+    if (!silent) log("positions", "Fetching portfolio via Meteora portfolio API...");
+    const portfolioUrl = `https://dlmm.datapi.meteora.ag/portfolio/open?user=${walletAddress}`;
+    const res = await fetch(portfolioUrl);
+    if (!res.ok) throw new Error(`Portfolio API ${res.status}: ${await res.text().catch(() => "")}`);
+    const portfolio = await res.json();
+
+    const pools = portfolio.pools || [];
+    log("positions", `Found ${pools.length} pool(s) with open positions`);
+
+    // LPAgent enrichment (relay, with direct fetch fallback) is only consumed in
+    // the per-position loop below. Skip it entirely when there are no open
+    // positions so an unavailable/slow relay doesn't burn the retry budget or
+    // emit a misleading "fallback" warning on every cycle with an empty wallet.
+    if (pools.length > 0 && shouldUseLpAgentRelay()) {
       try {
         if (!silent) log("positions", "Fetching raw LPAgent open positions via Agent Meridian relay...");
         const result = await fetchRawOpenPositionsFromMeridian({
@@ -1202,23 +1228,14 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
       }
     }
 
-    // Portfolio API discovers open pools/positions for this wallet.
-    // Detailed range data stays on Meteora PnL API; value/PnL can be overridden by LPAgent below.
-    if (!silent) log("positions", "Fetching portfolio via Meteora portfolio API...");
-    const portfolioUrl = `https://dlmm.datapi.meteora.ag/portfolio/open?user=${walletAddress}`;
-    const res = await fetch(portfolioUrl);
-    if (!res.ok) throw new Error(`Portfolio API ${res.status}: ${await res.text().catch(() => "")}`);
-    const portfolio = await res.json();
-
-    const pools = portfolio.pools || [];
-    log("positions", `Found ${pools.length} pool(s) with open positions`);
-
     // Fetch bin data (lowerBinId, upperBinId, poolActiveBinId) for all pools in parallel
     // Needed for rules 3 & 4 (active_bin vs upper_bin comparison)
     const binDataByPool = {};
     const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
     pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i]; });
-    const lpAgentByPosition = relayLpAgentByPosition || await fetchLpAgentOpenPositions(walletAddress);
+    const lpAgentByPosition = pools.length === 0
+      ? {}
+      : (relayLpAgentByPosition || await fetchLpAgentOpenPositions(walletAddress));
 
     const positions = [];
     for (const pool of pools) {
@@ -1527,7 +1544,15 @@ export async function closePosition({ position_address, reason }) {
     const wallet = getWallet();
     const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
     const poolMeta = await getPoolMetadata(poolAddress);
-    if (shouldUseLpAgentRelay()) {
+    // Relay zap-out is disabled: the OKX zap-out order embeds a direct owner SOL
+    // transfer (wSOL wrap / fee) that assertNoUnsafeSystemTransfer rejects, so it
+    // has failed 100% of closes and always falls back to the local path below.
+    // The failed attempt (build → sign → simulate → throw) adds seconds of latency
+    // to every close, which worsens fills during fast dumps. It also requested a
+    // 50% (slippageBps 5000) OKX swap — far looser than the local Jupiter autoswap.
+    // Skip straight to the safer, working local close + Jupiter autoswap path.
+    const RELAY_ZAP_OUT_ENABLED = false;
+    if (RELAY_ZAP_OUT_ENABLED && shouldUseLpAgentRelay()) {
       let relaySubmitted = false;
       try {
       const pool = await getPool(poolAddress);

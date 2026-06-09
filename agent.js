@@ -94,12 +94,12 @@ import { getDecisionSummary } from "./decision-log.js";
 // Supports OpenRouter (default) or any OpenAI-compatible local server (e.g. LM Studio)
 // To use LM Studio: set LLM_BASE_URL=http://localhost:1234/v1 and LLM_API_KEY=lm-studio in .env
 const client = new OpenAI({
-  baseURL: process.env.LLM_BASE_URL || "https://openrouter.ai/api/v1",
+  baseURL: process.env.LLM_BASE_URL || "https://api.anthropic.com/v1",
   apiKey: process.env.LLM_API_KEY || process.env.OPENROUTER_API_KEY,
   timeout: 5 * 60 * 1000,
 });
 
-const DEFAULT_MODEL = process.env.LLM_MODEL || "openrouter/healer-alpha";
+const DEFAULT_MODEL = process.env.LLM_MODEL || "claude-opus-4-7";
 
 const MUTATING_TOOL_INTENTS = /\b(deploy|open position|add liquidity|lp into|invest in|close|exit|withdraw|remove liquidity|claim|harvest|collect|swap|convert|sell|exchange|block|unblock|blacklist|add smart wallet|remove smart wallet|add wallet|remove wallet|pin|unpin|clear lesson|add lesson|set active strategy|remove strategy|add strategy|set |change |update |self.?update|pull latest|git pull|update yourself)\b/i;
 const LIVE_DATA_TOOL_INTENTS = /\b(balance|wallet|position|portfolio|pnl|yield|range|show positions|open positions|screen|candidate|find pool|search|research|analyze|check pool|token holders|narrative|study top|top lpers?|lp behavior|who.?s lping|performance|history|stats|report|list smart wallets|list blacklist|list blocked deployers|list lessons)\b/i;
@@ -147,6 +147,11 @@ function isThinkingModeToolChoiceError(error) {
   return /thinking mode does not support/i.test(message) && /tool_choice/i.test(message);
 }
 
+function isTemperatureUnsupportedError(error) {
+  const message = String(error?.message || error?.error?.message || error || "");
+  return /temperature/i.test(message) && /(deprecated|unsupported|not supported)/i.test(message);
+}
+
 /**
  * Core ReAct agent loop.
  *
@@ -186,6 +191,8 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   let noToolRetryCount = 0;
   // Stays true for the whole run once a thinking-mode provider rejects tool_choice
   let omitToolChoice = false;
+  // Stays true once the model rejects the temperature param (deprecated on newer Opus)
+  let omitTemperature = false;
 
   let emptyStreak = 0;
   for (let step = 0; step < maxSteps; step++) {
@@ -195,7 +202,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
       const activeModel = model || DEFAULT_MODEL;
 
       // Retry up to 3 times on transient provider errors (502, 503, 529)
-      const FALLBACK_MODEL = "stepfun/step-3.5-flash:free";
+      const FALLBACK_MODEL = "claude-haiku-4-5-20251001";
       let response;
       let usedModel = activeModel;
       // Force a tool call on step 0 for action intents — prevents the model from inventing deploy/close outcomes
@@ -208,9 +215,9 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
             model: usedModel,
             messages,
             tools: getToolsForRole(agentType, goal),
-            temperature: config.llm.temperature,
             max_tokens: maxOutputTokens ?? config.llm.maxTokens,
           };
+          if (!omitTemperature && config.llm.temperature != null) reqParams.temperature = config.llm.temperature;
           if (!omitToolChoice) reqParams.tool_choice = toolChoice;
           response = await client.chat.completions.create(reqParams);
         } catch (error) {
@@ -230,6 +237,12 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           if (!omitToolChoice && isThinkingModeToolChoiceError(error)) {
             omitToolChoice = true;
             log("agent", "Provider thinking mode does not support tool_choice — retrying without it");
+            attempt -= 1;
+            continue;
+          }
+          if (!omitTemperature && isTemperatureUnsupportedError(error)) {
+            omitTemperature = true;
+            log("agent", "Model rejected temperature param — retrying without it");
             attempt -= 1;
             continue;
           }

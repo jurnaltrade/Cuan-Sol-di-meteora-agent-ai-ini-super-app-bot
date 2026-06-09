@@ -3,7 +3,7 @@
   "rpcUrl": "https://pump.helius-rpc.com",
   "llmBaseUrl": "",
   "llmApiKey": "",
-  "llmModel": "minimax/minimax-m2.7",
+  "llmModel": "claude-opus-4-7",
   "dryRun": true,
 
   "deployAmountSol": 0.5,
@@ -13,7 +13,7 @@
   "gasReserve": 0.2,
   "positionSizePct": 0.35,
 
-  "strategy": "bid_ask",
+  "strategy": "auto",
   "minBinsBelow": 35,
   "maxBinsBelow": 69,
   "defaultBinsBelow": 69,
@@ -68,9 +68,9 @@
   "temperature": 0.373,
   "maxTokens": 4096,
   "maxSteps": 20,
-  "managementModel": "minimax/minimax-m2.5",
-  "screeningModel": "minimax/minimax-m2.5",
-  "generalModel": "minimax/minimax-m2.7",
+  "managementModel": "claude-opus-4-7",
+  "screeningModel": "claude-opus-4-7",
+  "generalModel": "claude-opus-4-7",
 
   "darwinEnabled": true,
   "darwinWindowDays": 60,

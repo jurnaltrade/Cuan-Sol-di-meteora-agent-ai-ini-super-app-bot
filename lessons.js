@@ -218,6 +218,11 @@ export async function recordPerformance(perf) {
  */
 function derivLesson(perf) {
   const tags = [];
+  const closeReasonText = String(perf.close_reason || "").toLowerCase();
+  const dumpedBelow =
+    closeReasonText.includes("below range") ||
+    closeReasonText.includes("dumped") ||
+    closeReasonText.includes("oor below");
   const feeYieldPct = perf.initial_value_usd > 0
     ? ((perf.fees_earned_usd || 0) / perf.initial_value_usd) * 100
     : 0;
@@ -253,7 +258,10 @@ function derivLesson(perf) {
   let rule = "";
 
   if (outcome === "good" || outcome === "bad") {
-    if (perf.range_efficiency < 30 && outcome === "bad") {
+    if (outcome === "bad" && dumpedBelow) {
+      rule = `AVOID: ${perf.pool_name}-type pools (volatility=${perf.volatility}, bin_step=${perf.bin_step}, organic=${perf.organic_score}) — price DUMPED through the entire entry range, bagging the falling base token at PnL ${perf.pnl_pct}%. Single-side SOL entry caught a falling knife. Require trend/momentum confirmation before deploy, or downsize for this volatility tier.`;
+      tags.push("downside_dump", "oor", perf.strategy, `volatility_${Math.round(perf.volatility)}`);
+    } else if (perf.range_efficiency < 30 && outcome === "bad") {
       rule = `AVOID: ${perf.pool_name}-type pools (volatility=${perf.volatility}, bin_step=${perf.bin_step}) with strategy="${perf.strategy}" — went OOR ${100 - perf.range_efficiency}% of the time. Consider wider bin_range or bid_ask strategy.`;
       tags.push("oor", perf.strategy, `volatility_${Math.round(perf.volatility)}`);
     } else if (perf.range_efficiency > 80 && outcome === "good") {
@@ -274,7 +282,6 @@ function derivLesson(perf) {
 
   if (!rule) return null;
 
-  const closeReasonText = String(perf.close_reason || "").toLowerCase();
   const positiveEvidence =
     feeYieldPct >= 1 ||
     (perf.fees_earned_usd || 0) >= 3 ||
@@ -282,6 +289,7 @@ function derivLesson(perf) {
   const negativeEvidence =
     perf.pnl_pct <= -5 ||
     perf.range_efficiency <= 30 ||
+    dumpedBelow ||
     closeReasonText.includes("out of range") ||
     closeReasonText.includes("oor") ||
     closeReasonText.includes("low yield") ||

@@ -129,7 +129,7 @@ Only call this if you need the current price to calculate a specific bin range (
 
 PRIORITY ORDER for strategy and bins:
 1. User explicitly specifies → always follow exactly (user override is absolute)
-2. No user spec → use the configured strategy from config.strategy.strategy and choose bins based on volatility
+2. No user spec → if config.strategy.strategy is "auto", choose shape by volatility ('bid_ask' if volatility >= 4, else 'spot'); otherwise use the configured strategy from config.strategy.strategy. Either way, choose bins based on volatility.
 
 HARD RULES:
 - Never use 'curve'.
@@ -140,7 +140,7 @@ HARD RULES:
   use bins_below only, keep bins_above=0, and the upper bin will be pinned to the current active bin.
 
 Guidelines (only when user hasn't specified):
-- Strategy: omit the strategy field — the system will use the configured default from config.strategy.strategy
+- Strategy: omit the strategy field — the system resolves it from config.strategy.strategy (volatility-driven when set to "auto": 'bid_ask' if volatility >= 4, else 'spot')
 - Bins: choose from configured minBinsBelow/maxBinsBelow by positive volatility. The hard lower floor is 35 bins.
 - Deposit: single-sided SOL only: set amount_y/amount_sol, keep amount_x=0.
 
@@ -167,7 +167,7 @@ WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
           strategy: {
             type: "string",
             enum: ["bid_ask", "spot"],
-            description: "DLMM strategy type. If user specifies, use exactly what they said. Otherwise omit — the system default from config.strategy.strategy will be used automatically."
+            description: "DLMM strategy type. If user specifies, use exactly what they said. Otherwise omit — the system resolves config.strategy.strategy (volatility-driven when 'auto': 'bid_ask' if volatility >= 4, else 'spot')."
           },
           bins_below: {
             type: "number",
