@@ -30,6 +30,7 @@ import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
+import { getRugcheckSignals } from "./tools/rugcheck.js";
 import { stageSignals } from "./signal-tracker.js";
 import { getWeightsSummary } from "./signal-weights.js";
 import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
@@ -453,16 +454,24 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const allCandidates = [];
     for (const pool of candidates) {
       const mint = pool.base?.mint;
-      const [smartWallets, narrative, tokenInfo] = await Promise.allSettled([
+      const needRugcheck = mint && (
+        config.screening.maxSniperPct != null ||
+        config.screening.maxSuspiciousPct != null ||
+        config.screening.maxBundlePct != null ||
+        config.screening.convictionScoreMin != null
+      );
+      const [smartWallets, narrative, tokenInfo, rugcheck] = await Promise.allSettled([
         checkSmartWalletsOnPool({ pool_address: pool.pool }),
         mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
         mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
+        needRugcheck ? getRugcheckSignals({ mint }) : Promise.resolve(null),
       ]);
       allCandidates.push({
         pool,
         sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
         n: narrative.status === "fulfilled" ? narrative.value : null,
         ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
+        rc: rugcheck.status === "fulfilled" ? rugcheck.value : null,
         mem: recallForPool(pool.pool),
       });
       await new Promise(r => setTimeout(r, 150)); // avoid 429s
@@ -470,7 +479,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
     // Hard filters after token recon — block launchpads and excessive Jupiter bot holders
     const filteredOut = [];
-    const passing = allCandidates.filter(({ pool, ti }) => {
+    const passing = allCandidates.filter(({ pool, ti, rc }) => {
       const launchpad = ti?.launchpad ?? null;
       if (launchpad && config.screening.allowedLaunchpads?.length > 0 && !config.screening.allowedLaunchpads.includes(launchpad)) {
         log("screening", `Skipping ${pool.name} — launchpad ${launchpad} not in allow-list`);
@@ -488,6 +497,26 @@ export async function runScreeningCycle({ silent = false } = {}) {
         log("screening", `Bot-holder filter: dropped ${pool.name} — bots ${botPct}% > ${maxBotHoldersPct}%`);
         filteredOut.push({ name: pool.name, reason: `bot holders ${botPct}% > ${maxBotHoldersPct}%` });
         return false;
+      }
+      // rugcheck.xyz-derived holder-quality filters — applied only when both the
+      // threshold is set and rugcheck supplied the metric (otherwise fail open).
+      const rugChecks = [
+        ["sniper holders", rc?.sniper_pct, config.screening.maxSniperPct, "above"],
+        ["suspicious holders", rc?.suspicious_pct, config.screening.maxSuspiciousPct, "above"],
+        ["bundle holders", rc?.bundle_pct, config.screening.maxBundlePct, "above"],
+        ["conviction score", rc?.conviction_score, config.screening.convictionScoreMin, "below"],
+      ];
+      for (const [label, value, threshold, dir] of rugChecks) {
+        if (value == null || threshold == null) continue;
+        const fails = dir === "above" ? value > threshold : value < threshold;
+        if (fails) {
+          const reason = dir === "above"
+            ? `${label} ${value.toFixed(1)}% > ${threshold}%`
+            : `${label} ${value.toFixed(1)} < ${threshold}`;
+          log("screening", `Rugcheck filter: dropped ${pool.name} — ${reason}`);
+          filteredOut.push({ name: pool.name, reason });
+          return false;
+        }
       }
       return true;
     });
@@ -546,7 +575,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     );
 
     // Build compact candidate blocks
-    const candidateBlocks = passing.map(({ pool, sw, n, ti, mem }, i) => {
+    const candidateBlocks = passing.map(({ pool, sw, n, ti, mem, rc }, i) => {
       const botPct = ti?.audit?.bot_holders_pct ?? "?";
       const top10Pct = ti?.audit?.top_holders_pct ?? "?";
       const feesSol = ti?.global_fees_sol ?? "?";
@@ -563,6 +592,9 @@ export async function runScreeningCycle({ silent = false } = {}) {
         `POOL: ${pool.name} (${pool.pool})`,
         `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
         `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
+        rc && (rc.conviction_score != null || rc.suspicious_pct != null || rc.sniper_pct != null || rc.bundle_pct != null)
+          ? `  rugcheck: conviction=${rc.conviction_score ?? "?"}, suspicious=${rc.suspicious_pct != null ? rc.suspicious_pct.toFixed(1) + "%" : "?"}, snipers=${rc.sniper_pct != null ? rc.sniper_pct.toFixed(1) + "%" : "?"}, bundle=${rc.bundle_pct != null ? rc.bundle_pct.toFixed(1) + "%" : "?"}`
+          : null,
         pvpLine,
         `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
         activeBin != null ? `  active_bin: ${activeBin}` : null,
