@@ -310,48 +310,84 @@ export async function runManagementCycle({ silent = false } = {}) {
     mgmtReport = reportLines.join("\n\n") +
       `\n\nSummary: 💼 ${positions.length} positions | ${cur}${totalValue.toFixed(4)} | fees: ${cur}${totalUnclaimed.toFixed(4)} | ${actionSummary}`;
 
-    // ── Call LLM only if action needed ──────────────────────────────
+    // ── Execute deterministic actions directly (no LLM) ─────────────
+    // CLOSE / CLAIM are already decided in JS, so execute them here. This
+    // keeps safety rules (stop-loss, trailing TP, OOR, low-yield) and fee
+    // claims working even when the LLM provider is unavailable (e.g. out of
+    // credits). Only INSTRUCTION positions, whose free-text condition can't
+    // be parsed in JS, are deferred to the LLM. Going through executeTool
+    // preserves close side-effects (recordClose/recordPerformance live in
+    // closePosition; notifyClose + auto-swap base→SOL live in executeTool).
     const actionPositions = positionData.filter(p => {
       const a = actionMap.get(p.position);
       return a.action !== "STAY";
     });
 
-    if (actionPositions.length > 0) {
-      log("cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
+    const instructionPositions = [];
+    const execResults = [];
+    for (const p of actionPositions) {
+      const act = actionMap.get(p.position);
+      if (act.action === "INSTRUCTION") { instructionPositions.push(p); continue; }
 
-      const actionBlocks = actionPositions.map((p) => {
-        const act = actionMap.get(p.position);
+      const toolName = act.action === "CLAIM" ? "claim_fees" : "close_position";
+      const args = toolName === "close_position"
+        ? { position_address: p.position, reason: act.reason || (act.rule && act.rule !== "exit" ? `Rule ${act.rule}` : "deterministic exit") }
+        : { position_address: p.position };
+      log("cron", `Management: executing ${toolName} on ${p.pair} (${act.action}${act.reason ? `: ${act.reason}` : ""})`);
+      await liveMessage?.toolStart(toolName);
+      try {
+        const result = await executeTool(toolName, args);
+        const ok = result?.success !== false;
+        await liveMessage?.toolFinish(toolName, result, ok);
+        execResults.push(`${p.pair}: ${toolName} ${ok ? "ok" : `failed (${result?.error || "unknown"})`}`);
+      } catch (e) {
+        await liveMessage?.toolFinish(toolName, { error: e.message }, false);
+        log("cron_error", `Management ${toolName} on ${p.pair} failed: ${e.message}`);
+        execResults.push(`${p.pair}: ${toolName} error (${e.message})`);
+      }
+    }
+
+    if (execResults.length > 0) {
+      log("cron", `Management: executed ${execResults.length} deterministic action(s)`);
+      mgmtReport += `\n\n${execResults.join("\n")}`;
+    }
+
+    // ── LLM only for INSTRUCTION positions (condition can't be parsed in JS) ──
+    if (instructionPositions.length > 0) {
+      log("cron", `Management: ${instructionPositions.length} instruction(s) — invoking LLM [model: ${config.llm.managementModel}]`);
+
+      const actionBlocks = instructionPositions.map((p) => {
         return [
           `POSITION: ${p.pair} (${p.position})`,
           `  pool: ${p.pool}`,
-          `  action: ${act.action}${act.rule && act.rule !== "exit" ? ` — Rule ${act.rule}: ${act.reason}` : ""}${act.rule === "exit" ? ` — ⚡ Trailing TP: ${act.reason}` : ""}`,
           `  pnl_pct: ${p.pnl_pct}% | unclaimed_fees: ${cur}${p.unclaimed_fees_usd} | value: ${cur}${p.total_value_usd} | fee_per_tvl_24h: ${p.fee_per_tvl_24h ?? "?"}%`,
           `  bins: lower=${p.lower_bin} upper=${p.upper_bin} active=${p.active_bin} | oor_minutes: ${p.minutes_out_of_range ?? 0}`,
-          p.instruction ? `  instruction: "${p.instruction}"` : null,
-        ].filter(Boolean).join("\n");
+          `  instruction: "${p.instruction}"`,
+        ].join("\n");
       }).join("\n\n");
 
-      const { content } = await agentLoop(`
-MANAGEMENT ACTION REQUIRED — ${actionPositions.length} position(s)
+      try {
+        const { content } = await agentLoop(`
+MANAGEMENT — evaluate ${instructionPositions.length} position instruction(s)
 
 ${actionBlocks}
 
-RULES:
-- CLOSE: call close_position only — it handles fee claiming internally, do NOT call claim_fees first
-- CLAIM: call claim_fees with position address
-- INSTRUCTION: evaluate the instruction condition. If met → close_position. If not → HOLD, do nothing.
-- ⚡ exit alerts: close immediately, no exceptions
-
-Execute the required actions. Do NOT re-evaluate CLOSE/CLAIM — rules already applied. Just execute.
-After executing, write a brief one-line result per position.
-      `, config.llm.maxSteps, [], "MANAGER", config.llm.managementModel, 2048, {
-        onToolStart: async ({ name }) => { await liveMessage?.toolStart(name); },
-        onToolFinish: async ({ name, result, success }) => { await liveMessage?.toolFinish(name, result, success); },
-      });
-
-      mgmtReport += `\n\n${content}`;
-    } else {
-      log("cron", "Management: all positions STAY — skipping LLM");
+For each position, evaluate the instruction condition against the live data above:
+- If the condition is met → call close_position (it claims fees internally; do NOT call claim_fees first).
+- If not met → HOLD, do nothing.
+After evaluating, write a brief one-line result per position.
+        `, config.llm.maxSteps, [], "MANAGER", config.llm.managementModel, 2048, {
+          onToolStart: async ({ name }) => { await liveMessage?.toolStart(name); },
+          onToolFinish: async ({ name, result, success }) => { await liveMessage?.toolFinish(name, result, success); },
+        });
+        mgmtReport += `\n\n${content}`;
+      } catch (e) {
+        // Deterministic closes above already ran; don't fail the whole cycle.
+        log("cron_error", `Management LLM (instruction eval) failed: ${e.message}`);
+        mgmtReport += `\n\n⚠️ Instruction eval skipped — LLM unavailable: ${e.message}`;
+      }
+    } else if (actionPositions.length === 0) {
+      log("cron", "Management: all positions STAY — no actions");
       await liveMessage?.note("No tool actions needed.");
     }
 
