@@ -1985,11 +1985,15 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
   startCronJobs();
   maybeRunMissedBriefing().catch(() => { });
   startPolling(telegramHandler);
-  (async () => {
-    try {
-      await runScreeningCycle({ silent: false });
-    } catch (e) {
-      log("startup_error", e.message);
-    }
-  })();
+  // Cron already schedules screening; skip the redundant immediate run to save
+  // tokens on restart. Set SCREEN_ON_START=true to force a run at startup.
+  if (process.env.SCREEN_ON_START === "true") {
+    (async () => {
+      try {
+        await runScreeningCycle({ silent: false });
+      } catch (e) {
+        log("startup_error", e.message);
+      }
+    })();
+  }
 }
