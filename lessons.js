@@ -330,7 +330,7 @@ function derivLesson(perf) {
  * @param {Object} config   - Live config object (mutated in place)
  * @returns {{ changes: Object, rationale: Object } | null}
  */
-export function evolveThresholds(perfData, config) {
+export function deriveThresholdChanges(perfData, config) {
   if (!perfData || perfData.length < MIN_EVOLVE_POSITIONS) return null;
 
   const winners = perfData.filter((p) => p.pnl_pct > 0);
@@ -343,69 +343,78 @@ export function evolveThresholds(perfData, config) {
   const changes   = {};
   const rationale = {};
 
-  // ── 1. minFeeActiveTvlRatio ────────────────────────────────────
-  // Raise the floor if low-fee pools consistently underperform.
+  // ── 1. minFeeActiveTvlRatio (EV-weighted) ────────────────────
+  // Weight every position by |pnl_pct| so a +1% penny-win barely validates a
+  // fee zone while a -49% loss dominates the loser profile. This pushes the
+  // floor toward EV, not win-frequency — the "naikin win rate doang" trap.
   {
-    const winnerFees = winners.map((p) => p.fee_tvl_ratio).filter(isFiniteNum);
-    const loserFees  = losers.map((p) => p.fee_tvl_ratio).filter(isFiniteNum);
-    const current    = config.screening.minFeeActiveTvlRatio;
+    const current = config.screening.minFeeActiveTvlRatio;
+    const winW = winners
+      .map((p) => ({ v: p.fee_tvl_ratio, w: Math.abs(p.pnl_pct) }))
+      .filter((x) => isFiniteNum(x.v) && isFiniteNum(x.w));
+    const loseW = losers
+      .map((p) => ({ v: p.fee_tvl_ratio, w: Math.abs(p.pnl_pct) }))
+      .filter((x) => isFiniteNum(x.v) && isFiniteNum(x.w));
 
-    if (winnerFees.length >= 2) {
-      // Minimum fee/TVL among winners — we know pools below this don't work for us
-      const minWinnerFee = Math.min(...winnerFees);
-      if (minWinnerFee > current * 1.2) {
-        const target  = minWinnerFee * 0.85; // stay slightly below min winner
+    if (winW.length >= 2) {
+      const wWin  = weightedMean(winW.map((x) => x.v), winW.map((x) => x.w));
+      const wLose = loseW.length ? weightedMean(loseW.map((x) => x.v), loseW.map((x) => x.w)) : null;
+      // Only raise if winners genuinely earned more fee/TVL than losers (weighted)
+      const winnersBeatLosers = wLose == null || wWin > wLose;
+      if (winnersBeatLosers && wWin > current * 1.2) {
+        const target  = wWin * 0.85; // stay slightly below the EV-weighted winner fee
         const newVal  = clamp(nudge(current, target, MAX_CHANGE_PER_STEP), 0.05, 10.0);
         const rounded = Number(newVal.toFixed(2));
         if (rounded > current) {
           changes.minFeeActiveTvlRatio = rounded;
-          rationale.minFeeActiveTvlRatio = `Lowest winner fee_tvl=${minWinnerFee.toFixed(2)} — raised floor from ${current} → ${rounded}`;
-        }
-      }
-    }
-
-    if (loserFees.length >= 2) {
-      // If losers all had high fee/TVL, that's noise (pumps then crash) — don't raise min
-      // But if losers had low fee/TVL, raise min
-      const maxLoserFee = Math.max(...loserFees);
-      if (maxLoserFee < current * 1.5 && winnerFees.length > 0) {
-        const minWinnerFee = Math.min(...winnerFees);
-        if (minWinnerFee > maxLoserFee) {
-          const target  = maxLoserFee * 1.2;
-          const newVal  = clamp(nudge(current, target, MAX_CHANGE_PER_STEP), 0.05, 10.0);
-          const rounded = Number(newVal.toFixed(2));
-          if (rounded > current && !changes.minFeeActiveTvlRatio) {
-            changes.minFeeActiveTvlRatio = rounded;
-            rationale.minFeeActiveTvlRatio = `Losers had fee_tvl<=${maxLoserFee.toFixed(2)}, winners higher — raised floor from ${current} → ${rounded}`;
-          }
+          rationale.minFeeActiveTvlRatio = `EV-weighted winner fee_tvl=${wWin.toFixed(2)}${wLose != null ? ` vs loser ${wLose.toFixed(2)}` : ""} — raised floor from ${current} → ${rounded}`;
         }
       }
     }
   }
 
-  // ── 2. minOrganic ─────────────────────────────────────────────
-  // Raise organic floor if low-organic tokens consistently failed.
+  // ── 2. minOrganic (EV-weighted) ──────────────────────────────
+  // Same magnitude weighting: big losers pull the loser-organic profile down,
+  // penny-wins barely lift the winner profile.
   {
-    const loserOrganics  = losers.map((p) => p.organic_score).filter(isFiniteNum);
-    const winnerOrganics = winners.map((p) => p.organic_score).filter(isFiniteNum);
-    const current        = config.screening.minOrganic;
+    const current = config.screening.minOrganic;
+    const toW = (arr) => arr
+      .map((p) => ({ v: p.organic_score, w: Math.abs(p.pnl_pct) }))
+      .filter((x) => isFiniteNum(x.v) && isFiniteNum(x.w));
+    const winO  = toW(winners);
+    const loseO = toW(losers);
 
-    if (loserOrganics.length >= 2 && winnerOrganics.length >= 1) {
-      const avgLoserOrganic  = avg(loserOrganics);
-      const avgWinnerOrganic = avg(winnerOrganics);
+    if (winO.length >= 1 && loseO.length >= 2) {
+      const wWin  = weightedMean(winO.map((x) => x.v), winO.map((x) => x.w));
+      const wLose = weightedMean(loseO.map((x) => x.v), loseO.map((x) => x.w));
       // Only raise if there's a clear gap (winners consistently more organic)
-      if (avgWinnerOrganic - avgLoserOrganic >= 10) {
-        // Set floor just below worst winner
-        const minWinnerOrganic = Math.min(...winnerOrganics);
-        const target = Math.max(minWinnerOrganic - 3, current);
+      if (wWin - wLose >= 10) {
+        const target = Math.max(wWin - 3, current);
         const newVal = clamp(Math.round(nudge(current, target, MAX_CHANGE_PER_STEP)), 60, 90);
         if (newVal > current) {
           changes.minOrganic = newVal;
-          rationale.minOrganic = `Winner avg organic ${avgWinnerOrganic.toFixed(0)} vs loser avg ${avgLoserOrganic.toFixed(0)} — raised from ${current} → ${newVal}`;
+          rationale.minOrganic = `EV-weighted winner organic ${wWin.toFixed(0)} vs loser ${wLose.toFixed(0)} — raised from ${current} → ${newVal}`;
         }
       }
     }
   }
+
+  return { changes, rationale };
+}
+
+/**
+ * Analyze closed position performance and evolve screening thresholds.
+ * Computes EV-weighted changes via deriveThresholdChanges, then persists them
+ * to user-config.json, applies to the live config, and logs a lesson.
+ *
+ * @param {Array}  perfData - Array of performance records (from lessons.json)
+ * @param {Object} config   - Live config object (mutated in place)
+ * @returns {{ changes: Object, rationale: Object } | null}
+ */
+export function evolveThresholds(perfData, config) {
+  const result = deriveThresholdChanges(perfData, config);
+  if (!result) return null;
+  const { changes, rationale } = result;
 
   if (Object.keys(changes).length === 0) return { changes: {}, rationale: {} };
 
@@ -430,7 +439,7 @@ export function evolveThresholds(perfData, config) {
   const data = load();
   data.lessons.push({
     id: Date.now(),
-    rule: `[AUTO-EVOLVED @ ${perfData.length} positions] ${Object.entries(changes).map(([k, v]) => `${k}=${v}`).join(", ")} — ${Object.values(rationale).join("; ")}`,
+    rule: `[AUTO-EVOLVED @ ${perfData.length} positions, EV-weighted] ${Object.entries(changes).map(([k, v]) => `${k}=${v}`).join(", ")} — ${Object.values(rationale).join("; ")}`,
     tags: ["evolution", "config_change"],
     outcome: "manual",
     created_at: new Date().toISOString(),
@@ -448,6 +457,17 @@ function isFiniteNum(n) {
 
 function avg(arr) {
   return arr.reduce((s, x) => s + x, 0) / arr.length;
+}
+
+/** Magnitude-weighted mean. Falls back to plain mean when all weights are 0. */
+export function weightedMean(values, weights) {
+  let sumW = 0, sumWX = 0;
+  for (let i = 0; i < values.length; i++) {
+    const w = weights[i] > 0 ? weights[i] : 0;
+    sumW += w;
+    sumWX += w * values[i];
+  }
+  return sumW > 0 ? sumWX / sumW : avg(values);
 }
 
 function percentile(arr, p) {
@@ -715,13 +735,68 @@ export function getPerformanceHistory({ hours = 24, limit = 50 } = {}) {
 
   const totalPnl = filtered.reduce((s, r) => s + (r.pnl_usd ?? 0), 0);
   const wins = filtered.filter((r) => r.pnl_usd > 0).length;
+  const edge = computeEdge(filtered);
 
   return {
     hours,
     count: filtered.length,
     total_pnl_usd: Math.round(totalPnl * 100) / 100,
     win_rate_pct: filtered.length > 0 ? Math.round((wins / filtered.length) * 100) : null,
+    ev_pct: edge?.ev_pct ?? null,
+    ev_usd: edge?.ev_usd ?? null,
+    avg_win_pct: edge?.avg_win_pct ?? null,
+    avg_loss_pct: edge?.avg_loss_pct ?? null,
+    payoff_ratio: edge?.payoff_ratio ?? null,
+    steamroller_warning: edge?.steamroller_warning ?? false,
     positions: filtered,
+  };
+}
+
+/**
+ * Compute the EV / risk-reward profile of a set of closed positions.
+ * Win rate alone hides exit asymmetry — this surfaces avg win vs avg loss,
+ * expected value per position (in % and notional USD), the payoff ratio
+ * (reward:risk), and a "steamroller" flag for the high-win-rate-but-negative-EV
+ * pattern (small wins, rare catastrophic losses).
+ *
+ * @param {Array} records - performance records with pnl_pct + pnl_usd
+ * @returns {Object|null}
+ */
+export function computeEdge(records) {
+  const valid = (records || []).filter(
+    (r) => Number.isFinite(r.pnl_pct) && Number.isFinite(r.pnl_usd)
+  );
+  const n = valid.length;
+  if (n === 0) return null;
+
+  const wins   = valid.filter((r) => r.pnl_usd > 0);
+  const losses = valid.filter((r) => r.pnl_usd <= 0);
+  const winRate  = wins.length / n;
+  const lossRate = losses.length / n;
+
+  const meanOf = (arr, key) => (arr.length ? arr.reduce((s, r) => s + r[key], 0) / arr.length : 0);
+  const avgWinPct  = meanOf(wins, "pnl_pct");
+  const avgLossPct = meanOf(losses, "pnl_pct"); // <= 0
+  const avgWinUsd  = meanOf(wins, "pnl_usd");
+  const avgLossUsd = meanOf(losses, "pnl_usd");
+
+  const evPct  = winRate * avgWinPct + lossRate * avgLossPct;
+  const evUsd  = winRate * avgWinUsd + lossRate * avgLossUsd;
+  const payoff = avgLossPct !== 0 ? Math.abs(avgWinPct / avgLossPct) : null;
+  const worstLossPct = losses.length ? Math.min(...losses.map((r) => r.pnl_pct)) : 0;
+
+  return {
+    n,
+    win_rate_pct: Math.round(winRate * 100),
+    avg_win_pct: Math.round(avgWinPct * 100) / 100,
+    avg_loss_pct: Math.round(avgLossPct * 100) / 100,
+    avg_win_usd: Math.round(avgWinUsd * 100) / 100,
+    avg_loss_usd: Math.round(avgLossUsd * 100) / 100,
+    ev_pct: Math.round(evPct * 100) / 100,
+    ev_usd: Math.round(evUsd * 100) / 100,
+    payoff_ratio: payoff != null ? Math.round(payoff * 100) / 100 : null,
+    worst_loss_pct: Math.round(worstLossPct * 100) / 100,
+    steamroller_warning: payoff != null && payoff < 1 && winRate > 0.6,
   };
 }
 
@@ -738,6 +813,7 @@ export function getPerformanceSummary() {
   const avgPnlPct = p.reduce((s, x) => s + x.pnl_pct, 0) / p.length;
   const avgRangeEfficiency = p.reduce((s, x) => s + x.range_efficiency, 0) / p.length;
   const wins = p.filter((x) => x.pnl_usd > 0).length;
+  const edge = computeEdge(p);
 
   return {
     total_positions_closed: p.length,
@@ -745,6 +821,13 @@ export function getPerformanceSummary() {
     avg_pnl_pct: Math.round(avgPnlPct * 100) / 100,
     avg_range_efficiency_pct: Math.round(avgRangeEfficiency * 10) / 10,
     win_rate_pct: Math.round((wins / p.length) * 100),
+    ev_pct: edge?.ev_pct ?? null,
+    ev_usd: edge?.ev_usd ?? null,
+    avg_win_pct: edge?.avg_win_pct ?? null,
+    avg_loss_pct: edge?.avg_loss_pct ?? null,
+    payoff_ratio: edge?.payoff_ratio ?? null,
+    worst_loss_pct: edge?.worst_loss_pct ?? null,
+    steamroller_warning: edge?.steamroller_warning ?? false,
     total_lessons: data.lessons.length,
   };
 }
