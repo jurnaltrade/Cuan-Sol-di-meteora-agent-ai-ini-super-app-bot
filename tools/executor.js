@@ -14,7 +14,7 @@ import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
 import { setPositionInstruction } from "../state.js";
 
-import { getPoolMemory, addPoolNote } from "../pool-memory.js";
+import { getPoolMemory, addPoolNote, evaluatePoolHistoryGate } from "../pool-memory.js";
 import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../strategy-library.js";
 import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-blacklist.js";
 import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
@@ -345,6 +345,9 @@ const toolMap = {
     const CONFIG_MAP = {
       // screening
       minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
+      minPoolDeploysForGate: ["screening", "minPoolDeploysForGate"],
+      maxPoolExclusionRate: ["screening", "maxPoolExclusionRate"],
+      minPoolAdjustedWinRate: ["screening", "minPoolAdjustedWinRate"],
       excludeHighSupplyConcentration: ["screening", "excludeHighSupplyConcentration"],
       minTvl: ["screening", "minTvl"],
       maxTvl: ["screening", "maxTvl"],
@@ -705,6 +708,22 @@ async function runSafetyChecks(name, args) {
           pass: false,
           reason: `bin_step ${args.bin_step} is outside the allowed range of [${minStep}-${maxStep}].`,
         };
+      }
+
+      // Hard gate on pool deploy history (non-LLM-overridable). Rejects pools the
+      // agent has repeatedly burned on — range-unstable (always OOR/pumps out) or
+      // a loser even when it stays in range — regardless of how good current metrics look.
+      if (args.pool_address) {
+        const poolHistory = evaluatePoolHistoryGate(
+          getPoolMemory({ pool_address: args.pool_address }),
+          config.screening
+        );
+        if (poolHistory.block) {
+          return {
+            pass: false,
+            reason: `Pool history gate: ${poolHistory.reason}. Refusing redeploy into a known-bad pool.`,
+          };
+        }
       }
 
       const deployAmountY = Number(args.amount_y ?? args.amount_sol ?? 0);
