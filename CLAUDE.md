@@ -171,7 +171,7 @@ Cron tasks created by `startCronJobs()`:
 | Health check | `0 * * * *` | One-shot `agentLoop` as MANAGER with health summary goal |
 | Briefing | `0 1 * * *` (UTC) | `runBriefing()` — 8 AM Jakarta |
 | Briefing watchdog | `0 */6 * * *` (UTC) | `maybeRunMissedBriefing()` — fires on startup if missed |
-| **PnL poller** | every 30s (`setInterval`) | Trailing-TP detection between management cycles (below) |
+| **PnL poller** | every 3s (`setInterval`, configurable via `config.pnl.pollIntervalSec`) | Real-time exit detection: trailing-TP, stop-loss, OOR, low-yield. Closes directly when rule triggers — no waiting for next management cycle. Confirmation: `confirmTicks` (default 2 = ~6s; set to 1 for ~3s closes) |
 
 **Race condition guards** (all in `index.js`):
 - `_managementBusy` / `_screeningBusy` flags prevent overlap.
@@ -304,6 +304,7 @@ All persistent files are loaded/saved on each call — no in-memory caching laye
 | `api` | `url`, `publicApiKey`, `lpAgentRelayEnabled` | `https://api.agentmeridian.xyz/api`, built-in key, false |
 | `jupiter` | `apiKey`, `referralAccount`, `referralFeeBps` | env override, fixed referral, 50 bps |
 | `indicators` | `enabled`, `entryPreset`, `exitPreset`, `rsiLength`, `intervals`, `candles`, `rsiOversold`, `rsiOverbought`, `requireAllIntervals` | false, supertrend_break, supertrend_break, 2, ["5_MINUTE"], 298, 30, 80, false |
+| `pnl` | `pollIntervalSec`, `confirmTicks` | 3, 2 |
 
 `update_config` (executor.js:333) uses a flat-key `CONFIG_MAP` (50+ entries) that knows how to (a) coerce booleans/arrays/strings/numbers, (b) clamp `binsBelow*` to `MIN_SAFE_BINS_BELOW=35`, (c) restart cron if `managementIntervalMin` / `screeningIntervalMin` changed, (d) write a `[SELF-TUNED]` lesson.
 
