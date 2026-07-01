@@ -1,4 +1,4 @@
-const toolDefinitions = [
+export const tools = [
   // ═══════════════════════════════════════════
   //  SCREENING TOOLS
   // ═══════════════════════════════════════════
@@ -51,9 +51,11 @@ Use this as the primary tool for finding new LP opportunities.`,
       description: `Get the top pre-scored pool candidates for deployment review.
 All filtering, scoring, and rule-checking is done in code — no analysis needed.
 Returns the top N eligible pools ranked by score (fee/TVL, organic, stability, volume).
-Each pool includes a score (0-100) and has already passed all hard disqualifiers.
-Use this instead of discover_pools for screening cycles.
-If this returns one candidate, still judge whether it is actually worth deploying; one weak candidate should be skipped.`,
+Each pool includes a score (0-100) and has already passed hard disqualifiers, but this does not mean deployment is mandatory.
+If only one candidate is returned, deploy only when it is genuinely high conviction; otherwise skip the cycle.
+Use this instead of discover_pools for screening cycles. The active screening source is controlled by screeningSource:
+- meteora: legacy Meteora pool-discovery flow
+- gmgn: GMGN trending/security/holders/price-action first, then Meteora DLMM pool match.`,
       parameters: {
         type: "object",
         properties: {
@@ -134,8 +136,7 @@ PRIORITY ORDER for strategy and bins:
 HARD RULES:
 - Never use 'curve'.
 - Bin Step: Only deploy in pools with bin_step between 80 and 125.
-- Volatility must be positive. If volatility is 0, null, or missing, do not deploy.
-- Range must cover at least 35 total bins. Never deploy 1-bin/tiny ranges.
+- Range: Never deploy a tiny range. Total bins must be at least the configured minimum, with a hard floor of 35 bins.
 - For single-side SOL deploys (amount_y only, amount_x=0), do not request upside exposure:
   use bins_below only, keep bins_above=0, and the upper bin will be pinned to the current active bin.
 
@@ -158,7 +159,7 @@ WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
           },
           amount_x: {
             type: "number",
-            description: "Unsupported for this agent. Keep at 0; deploys are single-side SOL via amount_y."
+            description: "Unsupported for this agent. Keep 0; deploys must be single-side SOL via amount_y/amount_sol."
           },
           amount_sol: {
             type: "number",
@@ -166,7 +167,7 @@ WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
           },
           strategy: {
             type: "string",
-            enum: ["bid_ask", "spot"],
+            enum: ["bid_ask"],
             description: "DLMM strategy type. If user specifies, use exactly what they said. Otherwise omit — the system default from config.strategy.strategy will be used automatically."
           },
           bins_below: {
@@ -382,15 +383,18 @@ WARNING: This executes a real on-chain transaction.`,
     function: {
       name: "update_config",
       description: `Update any of your operating parameters at runtime.
-Changes persist to user-config.json and take effect immediately — no restart needed.
+Non-GMGN changes persist to user-config.json; GMGN tuning persists to gmgn-config.json. Changes take effect immediately — no restart needed.
 
 VALID KEYS (use EXACTLY these key names, nothing else):
-Screening: minFeeActiveTvlRatio, minTvl, maxTvl, minVolume, minOrganic, minQuoteOrganic, minHolders, minMcap, maxMcap, minBinStep, maxBinStep, timeframe, category, minTokenFeesSol, excludeHighSupplyConcentration, allowedLaunchpads, blockedLaunchpads
-Management: minClaimAmount, outOfRangeBinsToClose, outOfRangeWaitMinutes, oorCooldownTriggerCount, oorCooldownHours, repeatDeployCooldownEnabled, repeatDeployCooldownTriggerCount, repeatDeployCooldownHours, repeatDeployCooldownScope, repeatDeployCooldownMinFeeEarnedPct, minVolumeToRebalance, stopLossPct, takeProfitPct, minSolToOpen, deployAmountSol, gasReserve, positionSizePct
+Screening: screeningSource, maxVolatility, minFeeActiveTvlRatio, minTvl, maxTvl, minVolume, minOrganic, minQuoteOrganic, minHolders, minMcap, maxMcap, minBinStep, maxBinStep, timeframe, category, minTokenFeesSol, excludeHighSupplyConcentration, useDiscordSignals, discordSignalMode, avoidPvpSymbols, blockPvpSymbols, maxBundlePct, maxBotHoldersPct, maxTop10Pct, allowedLaunchpads, blockedLaunchpads, minTokenAgeHours, maxTokenAgeHours, athFilterPct
+GMGN (persisted to gmgn-config.json): gmgnApiKey, gmgnBaseUrl, gmgnInterval, gmgnOrderBy, gmgnDirection, gmgnLimit, gmgnEnrichLimit, gmgnRequestDelayMs, gmgnMaxRetries, gmgnHoldersLimit, gmgnKlineResolution, gmgnKlineLookbackMinutes, gmgnFilters, gmgnPlatforms, gmgnMinMcap, gmgnMaxMcap, gmgnMinVolume, gmgnMinHolders, gmgnMinTokenAgeHours, gmgnMaxTokenAgeHours, gmgnAthFilterPct, gmgnMaxTop10HolderRate, gmgnMaxBundlerRate, gmgnMaxRatTraderRate, gmgnMaxFreshWalletRate, gmgnMaxDevTeamHoldRate, gmgnMaxBotDegenRate, gmgnMaxSniperCount, gmgnMaxSniperHoldRate, gmgnPreferredKolNames, gmgnPreferredKolMinHoldPct, gmgnDumpKolNames, gmgnDumpKolMinHoldPct, gmgnRequireKol, gmgnMinKolCount, gmgnMinSmartDegenCount, gmgnMinTotalFeeSol, gmgnIndicatorFilter, gmgnIndicatorInterval, gmgnRequireBullishSupertrend, gmgnRejectAlreadyAtBottom, gmgnRequireAboveSupertrend, gmgnMinRsi, gmgnMaxRsi, gmgnRequireBbPosition
+Management: minClaimAmount, autoSwapAfterClaim, outOfRangeBinsToClose, outOfRangeWaitMinutes, oorCooldownTriggerCount, oorCooldownHours, repeatDeployCooldownEnabled, repeatDeployCooldownTriggerCount, repeatDeployCooldownHours, repeatDeployCooldownScope, repeatDeployCooldownMinFeeEarnedPct, minVolumeToRebalance, stopLossPct, takeProfitPct, takeProfitFeePct, trailingTakeProfit, trailingTriggerPct, trailingDropPct, pnlSanityMaxDiffPct, solMode, minSolToOpen, deployAmountSol, gasReserve, positionSizePct, minAgeBeforeYieldCheck
 Risk: maxPositions, maxDeployAmount
-Schedule: managementIntervalMin, screeningIntervalMin
-Models: managementModel, screeningModel, generalModel
-Strategy: minBinsBelow, maxBinsBelow, defaultBinsBelow (legacy binsBelow maps to maxBinsBelow)
+Schedule: managementIntervalMin, screeningIntervalMin, healthCheckIntervalMin
+Models: managementModel, screeningModel, generalModel, temperature, maxTokens, maxSteps
+Strategy: strategy, binsBelow, minBinsBelow, maxBinsBelow, defaultBinsBelow
+Hive/API: hiveMindUrl, hiveMindApiKey, agentId, hiveMindPullMode, publicApiKey, agentMeridianApiUrl, lpAgentRelayEnabled
+Indicators: chartIndicatorsEnabled, indicatorEntryPreset, indicatorExitPreset, rsiLength, indicatorIntervals, indicatorCandles, rsiOversold, rsiOverbought, requireAllIntervals
 
 Reason is optional but helpful — logged as a lesson when provided.`,
       parameters: {
@@ -1112,13 +1116,3 @@ Blacklisted tokens are filtered BEFORE the LLM even sees pool candidates.`,
     }
   },
 ];
-
-export const tools = toolDefinitions.map((tool) => ({
-  ...tool,
-  function: {
-    ...tool.function,
-    parameters: tool.function.parameters?.type === "object"
-      ? { additionalProperties: false, ...tool.function.parameters }
-      : tool.function.parameters,
-  },
-}));

@@ -21,6 +21,7 @@ module.exports = {
       // Always start via this file (npm run pm2:start) so cwd + script path stay pinned to the repo.
       env: {
         NODE_ENV: "production",
+        NODE_OPTIONS: "--dns-result-order=ipv4first",
       },
     },
   ],

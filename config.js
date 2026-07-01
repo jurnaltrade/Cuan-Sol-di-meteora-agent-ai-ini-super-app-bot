@@ -84,6 +84,7 @@ export const config = {
     maxMcap:           u.maxMcap           ?? 10_000_000,
     minBinStep:        u.minBinStep        ?? 80,
     maxBinStep:        u.maxBinStep        ?? 125,
+    maxVolatility:     u.maxVolatility     ?? 8,
     timeframe:         u.timeframe         ?? "5m",
     category:          u.category          ?? "trending",
     minTokenFeesSol:   u.minTokenFeesSol   ?? 30,  // global fees paid (priority+jito tips). below = bundled/scam
@@ -98,6 +99,7 @@ export const config = {
     blockedLaunchpads:  u.blockedLaunchpads  ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
     minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
     maxTokenAgeHours:   u.maxTokenAgeHours   ?? null, // null = no maximum
+    minVolTvlRatio:     u.minVolTvlRatio     ?? null, // min daily vol/TVL % (e.g. 50 = volume must be >50% of TVL per day)
   },
 
   // ─── Position Management ────────────────
@@ -313,6 +315,7 @@ export function reloadScreeningThresholds() {
     if (fresh.minVolume      != null) s.minVolume      = fresh.minVolume;
     if (fresh.minBinStep     != null) s.minBinStep     = fresh.minBinStep;
     if (fresh.maxBinStep     != null) s.maxBinStep     = fresh.maxBinStep;
+    if (fresh.maxVolatility  != null) s.maxVolatility  = fresh.maxVolatility;
     if (fresh.timeframe         != null) s.timeframe         = fresh.timeframe;
     if (fresh.category          != null) s.category          = fresh.category;
     if (fresh.minTokenAgeHours  !== undefined) s.minTokenAgeHours = fresh.minTokenAgeHours;

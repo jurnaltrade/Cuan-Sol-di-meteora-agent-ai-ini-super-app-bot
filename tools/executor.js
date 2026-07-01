@@ -369,6 +369,7 @@ const toolMap = {
       blockedLaunchpads: ["screening", "blockedLaunchpads"],
       minTokenAgeHours: ["screening", "minTokenAgeHours"],
       maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
+      minVolTvlRatio: ["screening", "minVolTvlRatio"],
       minFeePerTvl24h: ["management", "minFeePerTvl24h"],
       loneCandidateMinDegen: ["screening", "loneCandidateMinDegen"],
       // management

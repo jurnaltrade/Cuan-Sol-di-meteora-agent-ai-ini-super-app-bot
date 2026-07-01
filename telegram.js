@@ -19,6 +19,8 @@ let _polling = false;
 let _liveMessageDepth = 0;
 let _warnedMissingChatId = false;
 let _warnedMissingAllowedUsers = false;
+let _lastPollErrorTime = 0;
+let _lastPollErrorMessage = "";
 
 function nonEmptyChatId(value) {
   if (value == null) return null;
@@ -96,10 +98,24 @@ export function isEnabled() {
   return !!TOKEN;
 }
 
+async function fetchWithRetry(url, options, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fetch(url, options);
+    } catch (e) {
+      if (i < retries) {
+        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 async function postTelegram(method, body) {
   if (!TOKEN || !chatId) return null;
   try {
-    const res = await fetch(`${BASE}/${method}`, {
+    const res = await fetchWithRetry(`${BASE}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, ...body }),
@@ -123,7 +139,7 @@ async function postTelegram(method, body) {
 async function postTelegramRaw(method, body) {
   if (!TOKEN) return null;
   try {
-    const res = await fetch(`${BASE}/${method}`, {
+    const res = await fetchWithRetry(`${BASE}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -401,7 +417,13 @@ async function poll(onMessage) {
       }
     } catch (e) {
       if (!e.message?.includes("aborted")) {
-        log("telegram_error", `Poll error: ${e.message}`);
+        const msg = e.message || "";
+        const now = Date.now();
+        if (msg !== _lastPollErrorMessage || now - _lastPollErrorTime > 60_000) {
+          log("telegram_error", `Poll error: ${msg}`);
+          _lastPollErrorMessage = msg;
+          _lastPollErrorTime = now;
+        }
       }
       await sleep(5000);
     }

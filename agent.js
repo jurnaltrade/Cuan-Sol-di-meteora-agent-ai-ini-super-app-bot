@@ -277,11 +277,17 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           }
         }
       }
+      // Reasoning models (e.g. minimax-m2.7) return content=null with reasoning in msg.reasoning
+      // Use reasoning as content if content is null; strip reasoning before pushing to history
+      if (!msg.content && response.choices[0].message.reasoning) {
+        msg.content = response.choices[0].message.reasoning;
+      }
+      delete msg.reasoning;
+      delete msg.reasoning_details;
       messages.push(msg);
 
       // If the model didn't call any tools, it's done
       if (!msg.tool_calls || msg.tool_calls.length === 0) {
-        // Hermes sometimes returns null content — pop the empty message and retry once
         if (!msg.content) {
           messages.pop(); // remove the empty assistant message
           log("agent", "Empty response, retrying...");

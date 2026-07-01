@@ -73,6 +73,8 @@ export function trackPosition({
   entry_tvl = null,
   entry_volume = null,
   entry_holders = null,
+  entry_volume_change_pct = null,
+  entry_price_change_pct = null,
 }) {
   const state = load();
   state.positions[position] = {
@@ -94,6 +96,8 @@ export function trackPosition({
     entry_tvl,
     entry_volume,
     entry_holders,
+    entry_volume_change_pct,
+    entry_price_change_pct,
     signal_snapshot: signal_snapshot || null,
     deployed_at: new Date().toISOString(),
     out_of_range_since: null,
@@ -411,10 +415,15 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   if (pos.out_of_range_since) {
     const minutesOOR = Math.floor((Date.now() - new Date(pos.out_of_range_since).getTime()) / 60000);
     if (minutesOOR >= mgmtConfig.outOfRangeWaitMinutes) {
-      return {
-        action: "OUT_OF_RANGE",
-        reason: `Out of range for ${minutesOOR}m (limit: ${mgmtConfig.outOfRangeWaitMinutes}m)`,
-      };
+      // Don't close OOR if position is profitable — let winners run
+      if (currentPnlPct != null && currentPnlPct > 0) {
+        log("state_oor_hold", `OOR ${minutesOOR}m but PnL +${currentPnlPct.toFixed(2)}% — holding (limit: ${mgmtConfig.outOfRangeWaitMinutes}m)`);
+      } else {
+        return {
+          action: "OUT_OF_RANGE",
+          reason: `Out of range for ${minutesOOR}m (limit: ${mgmtConfig.outOfRangeWaitMinutes}m)`,
+        };
+      }
     }
   }
 
@@ -427,10 +436,15 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     fee_per_tvl_24h < mgmtConfig.minFeePerTvl24h &&
     (age_minutes == null || age_minutes >= minAgeForYieldCheck)
   ) {
-    return {
-      action: "LOW_YIELD",
-      reason: `Low yield: fee/TVL ${fee_per_tvl_24h.toFixed(2)}% < min ${mgmtConfig.minFeePerTvl24h}% (age: ${age_minutes ?? "?"}m)`,
-    };
+    // Don't close low yield if position is profitable — let fees compound
+    if (currentPnlPct != null && currentPnlPct > 0) {
+      log("state_yield_hold", `Low yield ${fee_per_tvl_24h.toFixed(2)}% but PnL +${currentPnlPct.toFixed(2)}% — holding (age: ${age_minutes ?? "?"}m)`);
+    } else {
+      return {
+        action: "LOW_YIELD",
+        reason: `Low yield: fee/TVL ${fee_per_tvl_24h.toFixed(2)}% < min ${mgmtConfig.minFeePerTvl24h}% (age: ${age_minutes ?? "?"}m)`,
+      };
+    }
   }
 
   return null;
@@ -485,4 +499,53 @@ export function syncOpenPositions(active_addresses) {
   }
 
   if (changed) save(state);
+}
+
+// ── Loss streak circuit breaker ──────────────────────────────────────────
+// Pauses deploy after 3 consecutive losses. Resets on 1 win.
+
+const PAUSE_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+export function recordLossStreak(pnlPct) {
+  const state = load();
+  if (state._lossStreakCount == null) state._lossStreakCount = 0;
+
+  const isLoss = Number.isFinite(pnlPct) && pnlPct < 0;
+  const isWin = Number.isFinite(pnlPct) && pnlPct >= 0;
+
+  if (isLoss) {
+    state._lossStreakCount++;
+    log("circuit_breaker", `Loss streak incremented to ${state._lossStreakCount} (PnL: ${pnlPct.toFixed(2)}%)`);
+    if (state._lossStreakCount >= 3) {
+      state._deployPausedUntil = Date.now() + PAUSE_DURATION_MS;
+      log("circuit_breaker", `Circuit breaker TRIPPED — ${state._lossStreakCount} consecutive losses. Deploy paused until ${new Date(state._deployPausedUntil).toISOString()}`);
+    }
+  } else if (isWin) {
+    if (state._lossStreakCount > 0) {
+      log("circuit_breaker", `Win resets loss streak (was ${state._lossStreakCount})`);
+    }
+    state._lossStreakCount = 0;
+  }
+
+  save(state);
+  return state._lossStreakCount;
+}
+
+export function getCircuitBreaker() {
+  const state = load();
+  const paused = state._deployPausedUntil != null && Date.now() < state._deployPausedUntil;
+  return {
+    paused,
+    lossStreak: state._lossStreakCount ?? 0,
+    until: paused ? state._deployPausedUntil : null,
+    remainingMs: paused ? state._deployPausedUntil - Date.now() : 0,
+  };
+}
+
+export function clearCircuitBreaker() {
+  const state = load();
+  delete state._lossStreakCount;
+  delete state._deployPausedUntil;
+  save(state);
+  log("circuit_breaker", "Circuit breaker manually cleared");
 }

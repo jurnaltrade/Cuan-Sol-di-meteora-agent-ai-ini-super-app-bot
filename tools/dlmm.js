@@ -19,6 +19,7 @@ import {
   markInRange,
   recordClaim,
   recordClose,
+  recordLossStreak,
   getTrackedPosition,
   minutesOutOfRange,
   syncOpenPositions,
@@ -27,7 +28,6 @@ import { recordPerformance } from "../lessons.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
 import { normalizeMint } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
-import { agentMeridianJson, getAgentIdForRequests, getAgentMeridianHeaders } from "./agent-meridian.js";
 import { getAndClearStagedSignals } from "../signal-tracker.js";
 import { computePositions, fetchDlmmPnlForPool } from "./pnl.js";
 
@@ -98,13 +98,127 @@ function getWallet() {
   return _wallet;
 }
 
+function getMeridianApiBase() {
+  return String(config.api.url || "https://api.agentmeridian.xyz/api").replace(/\/+$/, "");
+}
+
+function getMeridianHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  if (config.api.publicApiKey) {
+    headers["x-api-key"] = config.api.publicApiKey;
+  }
+  return headers;
+}
+
 function shouldUseLpAgentRelay() {
   return !!config.api.lpAgentRelayEnabled;
 }
 
 function shouldUseLpAgentRelayForDeploy() {
-  // Zap-in relay is intentionally disabled; deploys use the local Meteora SDK path.
   return false;
+}
+
+async function meridianJson(pathname, options = {}) {
+  const { retry, ...fetchOptions } = options;
+  if (!retry) {
+    return meridianJsonOnce(pathname, fetchOptions);
+  }
+
+  const maxElapsedMs = Number(retry.maxElapsedMs || 30_000);
+  const maxAttempts = Number(retry.maxAttempts || 10);
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError = null;
+
+  while (Date.now() - startedAt < maxElapsedMs && attempt < maxAttempts) {
+    const elapsedMs = Date.now() - startedAt;
+    const remainingMs = Math.max(1, maxElapsedMs - elapsedMs);
+    try {
+      return await meridianJsonOnce(
+        pathname,
+        fetchOptions,
+        Math.min(Number(retry.perAttemptTimeoutMs || 10_000), remainingMs),
+      );
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableMeridianError(error) || attempt >= maxAttempts - 1) {
+        throw error;
+      }
+      const waitMs = Math.min(meridianRetryDelayMs(error, attempt), Math.max(0, remainingMs - 1));
+      if (waitMs <= 0) break;
+      await sleep(waitMs);
+      attempt += 1;
+    }
+  }
+
+  throw lastError || new Error(`${pathname} retry budget exhausted`);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableMeridianStatus(status) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function isRetryableMeridianError(error) {
+  if (isRetryableMeridianStatus(Number(error?.status || 0))) return true;
+  const name = String(error?.name || "");
+  const message = String(error?.message || "").toLowerCase();
+  return name === "AbortError" ||
+    message.includes("aborted") ||
+    message.includes("fetch failed") ||
+    message.includes("network");
+}
+
+function meridianRetryDelayMs(error, attempt) {
+  const retryAfter = Number(error?.retryAfter);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(retryAfter * 1000, 10_000);
+  }
+  return Math.min(500 * 2 ** attempt, 5_000);
+}
+
+async function meridianFetchWithTimeout(url, options, timeoutMs) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return fetch(url, options);
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = options.signal;
+  const abortFromParent = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", abortFromParent);
+  }
+}
+
+async function meridianJsonOnce(pathname, options = {}, timeoutMs = null) {
+  const res = await meridianFetchWithTimeout(`${getMeridianApiBase()}${pathname}`, options, timeoutMs);
+  const text = await res.text().catch(() => "");
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+  if (!res.ok) {
+    const error = new Error(payload?.error || `${pathname} ${res.status}`);
+    error.status = res.status;
+    error.payload = payload;
+    error.retryAfter = res.headers.get("retry-after");
+    throw error;
+  }
+  return payload;
 }
 
 function signSerializedTransaction(serialized, wallet) {
@@ -146,8 +260,7 @@ function getTransactionInstructions(tx) {
     .map((ix) => {
       const programId = keys[ix.programIdIndex];
       if (!programId) return null;
-      const indexes = ix.accountKeyIndexes || ix.accounts || [];
-      const accounts = indexes
+      const accounts = ix.accountKeyIndexes
         .map((accountIndex) => keys[accountIndex])
         .filter(Boolean);
       return new TransactionInstruction({
@@ -520,17 +633,6 @@ export async function deployPosition({
     activeBinsAbove = Math.max(0, upperBinId - activeBin.binId);
   }
 
-  const strategyMap = {
-    spot: StrategyType.Spot,
-    curve: StrategyType.Curve,
-    bid_ask: StrategyType.BidAsk,
-  };
-
-  const strategyType = strategyMap[activeStrategy];
-  if (strategyType === undefined) {
-    throw new Error(`Invalid strategy: ${activeStrategy}. Use spot, curve, or bid_ask.`);
-  }
-
   // Calculate amounts
   // If no explicit SOL amount is provided, fall back to the configured dynamic deploy size.
   const fallbackAmountY =
@@ -574,6 +676,17 @@ export async function deployPosition({
     throw new Error(
       `Invalid deploy range: total bins ${totalBins} is below minimum ${minBinsBelow}. Refusing 1-bin/tiny-range deploy.`,
     );
+  }
+
+  const strategyMap = {
+    spot: StrategyType.Spot,
+    curve: StrategyType.Curve,
+    bid_ask: StrategyType.BidAsk,
+  };
+
+  const strategyType = strategyMap[activeStrategy];
+  if (strategyType === undefined) {
+    throw new Error(`Invalid strategy: ${activeStrategy}. Use spot, curve, or bid_ask.`);
   }
 
   if (process.env.DRY_RUN === "true") {
@@ -620,7 +733,8 @@ export async function deployPosition({
   const actualBaseFee = base_fee ?? (baseFactor > 0 ? parseFloat((baseFactor * actualBinStep / 1e6 * 100).toFixed(4)) : null);
 
   const totalYLamports = new BN(Math.floor(finalAmountY * 1e9));
-  // Token X amount uses mint decimals when available, falling back to 9.
+  // For X, we assume it's also 9 decimals for now, or we'd need to fetch mint decimals.
+  // Most Meteora pools base tokens are 6 or 9. To be safe, we should fetch.
   let totalXLamports = new BN(0);
   if (finalAmountX > 0) {
     const mintInfo = await getConnection().getParsedAccountInfo(new PublicKey(pool.lbPair.tokenXMint));
@@ -635,11 +749,11 @@ export async function deployPosition({
         "deploy",
         `Relay deploy via Agent Meridian: ${pool_address} activeBin ${activeBin.binId} bins ${minBinId}->${maxBinId} amountY=${finalAmountY}`,
       );
-      const order = await agentMeridianJson("/execution/zap-in/order", {
+      const order = await meridianJson("/execution/zap-in/order", {
         method: "POST",
-        headers: getAgentMeridianHeaders({ json: true }),
+        headers: getMeridianHeaders(),
         body: JSON.stringify({
-          agentId: getAgentIdForRequests(),
+          agentId: config.hiveMind.agentId || "agent-local",
           idempotencyKey: `deploy:${pool_address}:${minBinId}:${maxBinId}:${finalAmountY}:${finalAmountX}`,
           poolId: pool_address,
           owner: wallet.publicKey.toString(),
@@ -664,9 +778,9 @@ export async function deployPosition({
 
       const addLiquidity = signSerializedTransactions(addLiquidityUnsigned, wallet);
       const swap = signSerializedTransactions(swapUnsigned, wallet);
-      const submit = await agentMeridianJson("/execution/zap-in/submit", {
+      const submit = await meridianJson("/execution/zap-in/submit", {
         method: "POST",
-        headers: getAgentMeridianHeaders({ json: true }),
+        headers: getMeridianHeaders(),
         body: JSON.stringify({
           requestId: order.requestId,
           lastValidBlockHeight: order?.order?.lastValidBlockHeight,
@@ -1116,11 +1230,11 @@ async function fetchRawOpenPositionsFromMeridian({ walletAddress, agentId }) {
     owner: walletAddress,
     agentId: agentId || "agent-local",
   });
-  const payload = await agentMeridianJson(`/positions/open/raw?${search.toString()}`, {
-    headers: getAgentMeridianHeaders(),
+  const payload = await meridianJson(`/positions/open/raw?${search.toString()}`, {
+    headers: config.api.publicApiKey ? { "x-api-key": config.api.publicApiKey } : {},
     retry: {
       maxElapsedMs: 30_000,
-      perAttemptTimeoutMs: 10_000,
+      perAttemptTimeoutMs: 30_000,
     },
   });
   const rows = Array.isArray(payload?.data) ? payload.data : [];
@@ -1511,248 +1625,225 @@ export async function closePosition({ position_address, reason }) {
     if (shouldUseLpAgentRelay()) {
       let relaySubmitted = false;
       try {
-      const pool = await getPool(poolAddress);
-      const relayAllowedDebitMints = [
-        pool.lbPair.tokenXMint.toString(),
-        pool.lbPair.tokenYMint.toString(),
-        config.tokens.SOL,
-      ];
-      const livePositions = await getMyPositions({ force: true, silent: true });
-      const livePosition = livePositions?.positions?.find((position) => position.position === position_address);
-      const closeFromBinId = livePosition?.lower_bin ?? tracked?.bin_range?.min ?? -887272;
-      const closeToBinId = livePosition?.upper_bin ?? tracked?.bin_range?.max ?? 887272;
-      const closeOutput = "allToken1";
+        const pool = await getPool(poolAddress);
+        const relayAllowedDebitMints = [
+          pool.lbPair.tokenXMint.toString(),
+          pool.lbPair.tokenYMint.toString(),
+          config.tokens.SOL,
+        ];
+        const livePositions = await getMyPositions({ force: true, silent: true });
+        const livePosition = livePositions?.positions?.find((position) => position.position === position_address);
+        const closeFromBinId = livePosition?.lower_bin ?? tracked?.bin_range?.min ?? -887272;
+        const closeToBinId = livePosition?.upper_bin ?? tracked?.bin_range?.max ?? 887272;
+        const closeOutput = "allToken1";
 
-      const order = await agentMeridianJson("/execution/zap-out/order", {
-        method: "POST",
-        headers: getAgentMeridianHeaders({ json: true }),
-        body: JSON.stringify({
-          agentId: getAgentIdForRequests(),
-          idempotencyKey: `close:${position_address}:10000`,
-          positionId: position_address,
-          owner: wallet.publicKey.toString(),
-          bps: 10000,
-          slippageBps: 5000,
-          output: closeOutput,
-          provider: "OKX",
-          type: "meteora",
-          fromBinId: closeFromBinId,
-          toBinId: closeToBinId,
-        }),
-      });
+        const order = await meridianJson("/execution/zap-out/order", {
+          method: "POST",
+          headers: getMeridianHeaders(),
+          body: JSON.stringify({
+            agentId: config.hiveMind.agentId || "agent-local",
+            idempotencyKey: `close:${position_address}:10000`,
+            positionId: position_address,
+            owner: wallet.publicKey.toString(),
+            bps: 10000,
+            slippageBps: 1000,
+            output: closeOutput,
+            provider: "OKX",
+            type: "meteora",
+            fromBinId: closeFromBinId,
+            toBinId: closeToBinId,
+          }),
+        });
 
-      const closeUnsigned = order?.order?.transactions?.close || [];
-      const swapUnsigned = order?.order?.transactions?.swap || [];
-      if (closeUnsigned.length + swapUnsigned.length === 0) {
-        throw new Error("LPAgent close order returned no transactions. Check the position, selected output, and relay order response.");
-      }
-
-      const closeSigned = await signAndSimulateRelayTransactions(closeUnsigned, wallet, {
-        label: "zap-out close",
-        allowedDebitMints: relayAllowedDebitMints,
-        maxSolLoss: 0.05,
-        requiredStaticAccounts: [wallet.publicKey.toString(), position_address],
-      });
-      const swapSigned = await signAndSimulateRelayTransactions(swapUnsigned, wallet, {
-        label: "zap-out swap",
-        allowedDebitMints: relayAllowedDebitMints,
-        maxSolLoss: 0.05,
-        requiredStaticAccounts: [wallet.publicKey.toString()],
-      });
-
-      relaySubmitted = true;
-      const submit = await agentMeridianJson("/execution/zap-out/submit", {
-        method: "POST",
-        headers: getAgentMeridianHeaders({ json: true }),
-        body: JSON.stringify({
-          requestId: order.requestId,
-          lastValidBlockHeight: order?.order?.lastValidBlockHeight,
-          transactions: {
-            close: closeSigned,
-            swap: swapSigned,
-          },
-        }),
-      });
-
-      const claimTxHashes = [];
-      const closeTxHashes = normalizeExecutionSignatures(submit);
-      const txHashes = [...claimTxHashes, ...closeTxHashes];
-
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-      _positionsCacheAt = 0;
-
-      let closedConfirmed = false;
-      for (let attempt = 0; attempt < 4; attempt++) {
-        try {
-          const refreshed = await getMyPositions({ force: true, silent: true });
-          const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
-          if (!stillOpen) {
-            closedConfirmed = true;
-            break;
-          }
-          log("close_warn", `Relay close still appears open after submit (attempt ${attempt + 1}/4)`);
-        } catch (e) {
-          log("close_warn", `Relay close verification failed (attempt ${attempt + 1}/4): ${e.message}`);
-        }
-        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 3000));
-      }
-
-      if (!closedConfirmed) {
-        return {
-          success: false,
-          error: "Close submit succeeded but position still appears open after verification window",
-          position: position_address,
-          pool: poolAddress,
-          close_txs: closeTxHashes,
-          txs: txHashes,
-        };
-      }
-
-      recordClose(position_address, reason || "agent decision");
-
-      if (tracked) {
-        const deployedAt = new Date(tracked.deployed_at).getTime();
-        const minutesHeld = Math.floor((Date.now() - deployedAt) / 60000);
-        let minutesOOR = 0;
-        if (tracked.out_of_range_since) {
-          minutesOOR = Math.floor((Date.now() - new Date(tracked.out_of_range_since).getTime()) / 60000);
+        const closeUnsigned = order?.order?.transactions?.close || [];
+        const swapUnsigned = order?.order?.transactions?.swap || [];
+        if (closeUnsigned.length + swapUnsigned.length === 0) {
+          throw new Error("LPAgent close order returned no transactions. Check the position, selected output, and relay order response.");
         }
 
-        let pnlUsd = 0;
-        let pnlTrueUsd = 0;
-        let pnlPct = 0;
-        let finalValueUsd = 0;
-        let initialUsd = 0;
-        let feesUsd = tracked.total_fees_claimed_usd || 0;
-        try {
-          const closedUrl = `https://dlmm.datapi.meteora.ag/positions/${poolAddress}/pnl?user=${wallet.publicKey.toString()}&status=closed&pageSize=50&page=1`;
-          for (let attempt = 0; attempt < 6; attempt++) {
-            const res = await fetch(closedUrl);
-            if (res.ok) {
-              const data = await res.json();
-              const posEntry = (data.positions || []).find((entry) => entry.positionAddress === position_address);
-              if (posEntry) {
-                pnlTrueUsd = safeNum(posEntry.pnlUsd);
-                pnlUsd = config.management.solMode ? getClosedPnlValue(posEntry, true) : pnlTrueUsd;
-                pnlPct = getClosedPnlPct(posEntry, config.management.solMode);
-                finalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
-                initialUsd = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
-                feesUsd = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
-                break;
-              }
+        const closeSigned = await signAndSimulateRelayTransactions(closeUnsigned, wallet, {
+          label: "zap-out close",
+          allowedDebitMints: relayAllowedDebitMints,
+          maxSolLoss: 0.05,
+          requiredStaticAccounts: [wallet.publicKey.toString(), position_address],
+        });
+        const swapSigned = await signAndSimulateRelayTransactions(swapUnsigned, wallet, {
+          label: "zap-out swap",
+          allowedDebitMints: relayAllowedDebitMints,
+          maxSolLoss: 0.05,
+          requiredStaticAccounts: [wallet.publicKey.toString()],
+        });
+
+        relaySubmitted = true;
+        const submit = await meridianJson("/execution/zap-out/submit", {
+          method: "POST",
+          headers: getMeridianHeaders(),
+          body: JSON.stringify({
+            requestId: order.requestId,
+            lastValidBlockHeight: order?.order?.lastValidBlockHeight,
+            transactions: {
+              close: closeSigned,
+              swap: swapSigned,
+            },
+          }),
+        });
+
+        const claimTxHashes = [];
+        const closeTxHashes = normalizeExecutionSignatures(submit);
+        const txHashes = [...claimTxHashes, ...closeTxHashes];
+
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        _positionsCacheAt = 0;
+
+        let closedConfirmed = false;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try {
+            const refreshed = await getMyPositions({ force: true, silent: true });
+            const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
+            if (!stillOpen) {
+              closedConfirmed = true;
+              break;
             }
-            if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 5000));
+            log("close_warn", `Relay close still appears open after submit (attempt ${attempt + 1}/4)`);
+          } catch (e) {
+            log("close_warn", `Relay close verification failed (attempt ${attempt + 1}/4): ${e.message}`);
           }
-        } catch (e) {
-          log("close_warn", `Relay closed PnL fetch failed: ${e.message}`);
+          if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 3000));
         }
 
-        const closeBaseMint = livePosition?.base_mint || pool.lbPair.tokenXMint.toString();
-        const signalSnapshot = resolvePerformanceSignalSnapshot({
-          poolAddress,
-          baseMint: closeBaseMint,
-          tracked,
-        });
+        if (!closedConfirmed) {
+          return {
+            success: false,
+            error: "Close submit succeeded but position still appears open after verification window",
+            position: position_address,
+            pool: poolAddress,
+            close_txs: closeTxHashes,
+            txs: txHashes,
+          };
+        }
 
-        let exitMarket = {};
-        try {
-          const { default: fetch } = await import("node-fetch").catch(() => ({ default: globalThis.fetch }));
-          const exitDetail = await fetch(`https://pool-discovery-api.datapi.meteora.ag/pools?page_size=1&filter_by=${encodeURIComponent(`pool_address=${poolAddress}`)}&timeframe=${encodeURIComponent(config.screening?.timeframe || "5m")}`).then(r => r.json()).catch(() => null);
-          const ep = exitDetail?.data?.[0];
-          if (ep) {
-            exitMarket = {
-              exit_mcap: parseFloat(ep?.token_x?.market_cap) || null,
-              exit_tvl: parseFloat(ep?.tvl ?? ep?.active_tvl) || null,
-              exit_volume: parseFloat(ep?.volume) || null,
-            };
+        recordClose(position_address, reason || "agent decision");
+
+        if (tracked) {
+          const deployedAt = new Date(tracked.deployed_at).getTime();
+          const minutesHeld = Math.floor((Date.now() - deployedAt) / 60000);
+          let minutesOOR = 0;
+          if (tracked.out_of_range_since) {
+            minutesOOR = Math.floor((Date.now() - new Date(tracked.out_of_range_since).getTime()) / 60000);
           }
-        } catch { /* non-blocking */ }
 
-        await recordPerformance({
-          position: position_address,
-          pool: poolAddress,
-          pool_name: tracked.pool_name || poolMeta.name || poolAddress.slice(0, 8),
-          base_mint: closeBaseMint,
-          strategy: tracked.strategy,
-          bin_range: tracked.bin_range,
-          bin_step: tracked.bin_step || null,
-          volatility: tracked.volatility ?? null,
-          fee_tvl_ratio: tracked.fee_tvl_ratio || null,
-          organic_score: tracked.organic_score || null,
-          amount_sol: tracked.amount_sol,
-          fees_earned_usd: feesUsd,
-          final_value_usd: finalValueUsd,
-          initial_value_usd: initialUsd,
-          minutes_in_range: minutesHeld - minutesOOR,
-          minutes_held: minutesHeld,
-          close_reason: reason || "agent decision",
-          signal_snapshot: signalSnapshot,
-          entry_mcap: tracked.entry_mcap ?? null,
-          entry_tvl: tracked.entry_tvl ?? null,
-          entry_volume: tracked.entry_volume ?? null,
-          entry_holders: tracked.entry_holders ?? null,
-          ...exitMarket,
-        });
+          let pnlUsd = 0;
+          let pnlTrueUsd = 0;
+          let pnlPct = 0;
+          let finalValueUsd = 0;
+          let initialUsd = 0;
+          let feesUsd = tracked.total_fees_claimed_usd || 0;
+          try {
+            const closedUrl = `https://dlmm.datapi.meteora.ag/positions/${poolAddress}/pnl?user=${wallet.publicKey.toString()}&status=closed&pageSize=50&page=1`;
+            for (let attempt = 0; attempt < 6; attempt++) {
+              const res = await fetch(closedUrl);
+              if (res.ok) {
+                const data = await res.json();
+                const posEntry = (data.positions || []).find((entry) => entry.positionAddress === position_address);
+                if (posEntry) {
+                  pnlTrueUsd = safeNum(posEntry.pnlUsd);
+                  pnlUsd = config.management.solMode ? getClosedPnlValue(posEntry, true) : pnlTrueUsd;
+                  pnlPct = getClosedPnlPct(posEntry, config.management.solMode);
+                  finalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
+                  initialUsd = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
+                  feesUsd = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
+                  break;
+                }
+              }
+              if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 5000));
+            }
+          } catch (e) {
+            log("close_warn", `Relay closed PnL fetch failed: ${e.message}`);
+          }
 
-        appendDecision({
-          type: "close",
-          actor: "MANAGER",
-          pool: poolAddress,
-          pool_name: tracked.pool_name || poolMeta.name || poolAddress.slice(0, 8),
-          position: position_address,
-          summary: `Relay closed at ${pnlPct.toFixed(2)}%`,
-          reason: reason || "agent decision",
-          risks: [
-            minutesOOR > 0 ? `out of range ${minutesOOR}m` : null,
-            tracked.volatility != null ? `volatility ${tracked.volatility}` : null,
-          ].filter(Boolean),
-          metrics: {
+          const closeBaseMint = livePosition?.base_mint || pool.lbPair.tokenXMint.toString();
+          const signalSnapshot = resolvePerformanceSignalSnapshot({
+            poolAddress,
+            baseMint: closeBaseMint,
+            tracked,
+          });
+
+          let exitMarket = {};
+          try {
+            const exitDetail = await fetch(`https://pool-discovery-api.datapi.meteora.ag/pools?page_size=1&filter_by=${encodeURIComponent(`pool_address=${poolAddress}`)}&timeframe=${encodeURIComponent(config.screening?.timeframe || "5m")}`).then(r => r.json()).catch(() => null);
+            const ep = exitDetail?.data?.[0];
+            if (ep) {
+              exitMarket = {
+                exit_mcap: parseFloat(ep?.token_x?.market_cap) || null,
+                exit_tvl: parseFloat(ep?.tvl ?? ep?.active_tvl) || null,
+                exit_volume: parseFloat(ep?.volume) || null,
+              };
+            }
+          } catch { /* non-blocking */ }
+
+          await recordPerformance({
+            position: position_address,
+            pool: poolAddress,
+            pool_name: tracked.pool_name || poolMeta.name || poolAddress.slice(0, 8),
+            base_mint: closeBaseMint,
+            strategy: tracked.strategy,
+            bin_range: tracked.bin_range,
+            bin_step: tracked.bin_step || null,
+            volatility: tracked.volatility ?? null,
+            fee_tvl_ratio: tracked.fee_tvl_ratio || null,
+            organic_score: tracked.organic_score || null,
+            amount_sol: tracked.amount_sol,
+            fees_earned_usd: feesUsd,
+            final_value_usd: finalValueUsd,
+            initial_value_usd: initialUsd,
+            minutes_in_range: minutesHeld - minutesOOR,
+            minutes_held: minutesHeld,
+            close_reason: reason || "agent decision",
+            signal_snapshot: signalSnapshot,
+            entry_mcap: tracked.entry_mcap ?? null,
+            entry_tvl: tracked.entry_tvl ?? null,
+            entry_volume: tracked.entry_volume ?? null,
+            entry_holders: tracked.entry_holders ?? null,
+            ...exitMarket,
+          });
+
+          recordLossStreak(pnlPct);
+
+          appendDecision({
+            type: "close",
+            actor: "MANAGER",
+            pool: poolAddress,
+            pool_name: tracked.pool_name || poolMeta.name || poolAddress.slice(0, 8),
+            position: position_address,
+            summary: `Relay closed at ${pnlPct.toFixed(2)}%`,
+            reason: reason || "agent decision",
+            risks: [
+              minutesOOR > 0 ? `out of range ${minutesOOR}m` : null,
+              tracked.volatility != null ? `volatility ${tracked.volatility}` : null,
+            ].filter(Boolean),
+            metrics: {
+              pnl_usd: pnlUsd,
+              pnl_pct: pnlPct,
+              fees_usd: feesUsd,
+              minutes_held: minutesHeld,
+            },
+          });
+
+          return {
+            success: true,
+            relay: true,
+            request_id: order.requestId,
+            position: position_address,
+            pool: poolAddress,
+            pool_name: tracked.pool_name || poolMeta.name || null,
+            claim_txs: claimTxHashes,
+            close_txs: closeTxHashes,
+            txs: txHashes,
             pnl_usd: pnlUsd,
             pnl_pct: pnlPct,
-            fees_usd: feesUsd,
-            minutes_held: minutesHeld,
-          },
-        });
-
-        return {
-          success: true,
-          relay: true,
-          request_id: order.requestId,
-          position: position_address,
-          pool: poolAddress,
-          pool_name: tracked.pool_name || poolMeta.name || null,
-          claim_txs: claimTxHashes,
-          close_txs: closeTxHashes,
-          txs: txHashes,
-          pnl_usd: pnlUsd,
-          pnl_pct: pnlPct,
-          base_mint: closeBaseMint,
-        };
-      }
-
-      appendDecision({
-        type: "close",
-        actor: "MANAGER",
-        pool: poolAddress,
-        pool_name: poolMeta.name || poolAddress.slice(0, 8),
-        position: position_address,
-        summary: "Relay closed position",
-        reason: reason || "agent decision",
-        metrics: {},
-      });
-
-      return {
-        success: true,
-        relay: true,
-        request_id: order.requestId,
-        position: position_address,
-        pool: poolAddress,
-        pool_name: poolMeta.name || null,
-        claim_txs: claimTxHashes,
-        close_txs: closeTxHashes,
-        txs: txHashes,
-        base_mint: livePosition?.base_mint || null,
-      };
+            base_mint: closeBaseMint,
+          };
+        }
       } catch (relayError) {
         if (relaySubmitted) throw relayError;
         log("close_warn", `Relay zap-out failed before submit; falling back to local close + Jupiter autoswap: ${relayError.message}`);
@@ -1998,6 +2089,8 @@ export async function closePosition({ position_address, reason }) {
         entry_holders: tracked.entry_holders ?? null,
         ...exitMarket,
       });
+
+      recordLossStreak(pnlPct);
 
       appendDecision({
         type: "close",

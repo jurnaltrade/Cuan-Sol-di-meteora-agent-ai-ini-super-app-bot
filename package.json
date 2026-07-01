@@ -10,7 +10,7 @@
   "scripts": {
     "setup": "node setup.js",
     "env:encrypt": "node scripts/envrypt.js encrypt",
-    "start": "node index.js",
+    "start": "node --dns-result-order=ipv4first index.js",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:restart": "pm2 restart meridian --update-env",
     "pm2:logs": "pm2 logs meridian --lines 100",

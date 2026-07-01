@@ -64,51 +64,69 @@ export async function getWalletBalances() {
     return { wallet: null, sol: 0, sol_price: 0, sol_usd: 0, usdc: 0, tokens: [], total_usd: 0, error: "Wallet not configured" };
   }
 
+  // Try Helius first, fall back to RPC for SOL balance
   const HELIUS_KEY = process.env.HELIUS_API_KEY;
-  if (!HELIUS_KEY) {
-    log("wallet_error", "HELIUS_API_KEY not set in .env");
-    return { wallet: walletAddress, sol: 0, sol_price: 0, sol_usd: 0, usdc: 0, tokens: [], total_usd: 0, error: "Helius API key missing" };
+  if (HELIUS_KEY) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      const url = `https://api.helius.xyz/v1/wallet/${walletAddress}/balances?api-key=${HELIUS_KEY}`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+
+      if (res.ok) {
+        const data = await res.json();
+        const balances = data.balances || [];
+
+        const solEntry = balances.find(b => b.mint === config.tokens.SOL || b.symbol === "SOL");
+        const usdcEntry = balances.find(b => b.mint === config.tokens.USDC || b.symbol === "USDC");
+
+        const solBalance = solEntry?.balance || 0;
+        const solPrice = solEntry?.pricePerToken || 0;
+        const solUsd = solEntry?.usdValue || 0;
+        const usdcBalance = usdcEntry?.balance || 0;
+
+        const enrichedTokens = balances.map(b => ({
+          mint: b.mint,
+          symbol: b.symbol || b.mint.slice(0, 8),
+          balance: b.balance,
+          usd: b.usdValue ? Math.round(b.usdValue * 100) / 100 : null,
+        }));
+
+        return {
+          wallet: walletAddress,
+          sol: Math.round(solBalance * 1e6) / 1e6,
+          sol_price: Math.round(solPrice * 100) / 100,
+          sol_usd: Math.round(solUsd * 100) / 100,
+          usdc: Math.round(usdcBalance * 100) / 100,
+          tokens: enrichedTokens,
+          total_usd: Math.round((data.totalUsdValue || 0) * 100) / 100,
+        };
+      } else {
+        log("wallet_error", `Helius API error: ${res.status} ${res.statusText}`);
+      }
+    } catch (error) {
+      log("wallet_error", `Helius failed: ${error.message}`);
+    }
   }
 
+  // Fallback: get SOL balance from RPC directly
   try {
-    const url = `https://api.helius.xyz/v1/wallet/${walletAddress}/balances?api-key=${HELIUS_KEY}`;
-    const res = await fetch(url);
-    
-    if (!res.ok) {
-      throw new Error(`Helius API error: ${res.status} ${res.statusText}`);
-    }
-
-    const data = await res.json();
-    const balances = data.balances || [];
-
-    // ─── Find SOL and USDC ────────────────────────────────────
-    const solEntry = balances.find(b => b.mint === config.tokens.SOL || b.symbol === "SOL");
-    const usdcEntry = balances.find(b => b.mint === config.tokens.USDC || b.symbol === "USDC");
-
-    const solBalance = solEntry?.balance || 0;
-    const solPrice = solEntry?.pricePerToken || 0;
-    const solUsd = solEntry?.usdValue || 0;
-    const usdcBalance = usdcEntry?.balance || 0;
-
-    // ─── Map all tokens ───────────────────────────────────────
-    const enrichedTokens = balances.map(b => ({
-      mint: b.mint,
-      symbol: b.symbol || b.mint.slice(0, 8),
-      balance: b.balance,
-      usd: b.usdValue ? Math.round(b.usdValue * 100) / 100 : null,
-    }));
-
+    log("wallet_warn", "Falling back to RPC for SOL balance");
+    const connection = getConnection();
+    const solBalance = await connection.getBalance(getWallet().publicKey);
+    const solValue = solBalance / LAMPORTS_PER_SOL;
     return {
       wallet: walletAddress,
-      sol: Math.round(solBalance * 1e6) / 1e6,
-      sol_price: Math.round(solPrice * 100) / 100,
-      sol_usd: Math.round(solUsd * 100) / 100,
-      usdc: Math.round(usdcBalance * 100) / 100,
-      tokens: enrichedTokens,
-      total_usd: Math.round((data.totalUsdValue || 0) * 100) / 100,
+      sol: Math.round(solValue * 1e6) / 1e6,
+      sol_price: 0,
+      sol_usd: 0,
+      usdc: 0,
+      tokens: [],
+      total_usd: 0,
     };
-  } catch (error) {
-    log("wallet_error", error.message);
+  } catch (rpcError) {
+    log("wallet_error", `RPC fallback also failed: ${rpcError.message}`);
     return {
       wallet: walletAddress,
       sol: 0,
@@ -117,7 +135,7 @@ export async function getWalletBalances() {
       usdc: 0,
       tokens: [],
       total_usd: 0,
-      error: error.message,
+      error: `All balance lookups failed: ${rpcError.message}`,
     };
   }
 }

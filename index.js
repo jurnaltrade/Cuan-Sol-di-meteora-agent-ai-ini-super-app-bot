@@ -1,4 +1,13 @@
 import "./envcrypt.js";
+if (typeof globalThis !== "undefined" && !globalThis._fetchPatched) {
+  globalThis._fetchPatched = true;
+  const _origFetch = globalThis.fetch;
+  globalThis.fetch = (url, opts = {}) => {
+    opts.headers = new Headers(opts.headers || {});
+    if (!opts.headers.has("User-Agent")) opts.headers.set("User-Agent", "MeridianBot/1.0");
+    return _origFetch(url, opts);
+  };
+}
 import cron from "node-cron";
 import readline from "readline";
 import path from "path";
@@ -25,7 +34,8 @@ import {
   createLiveMessage,
 } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
-import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, getTrackedPositions, setPositionInstruction, updatePnlAndCheckExits, confirmPeak, registerExitSignal } from "./state.js";
+import { scanWalletHistory, getWalletSummary, getWalletHistory, tsToDate } from "./wallet-history.js";
+import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, getTrackedPositions, setPositionInstruction, updatePnlAndCheckExits, confirmPeak, registerExitSignal, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop, getCircuitBreaker } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -365,6 +375,15 @@ export async function runScreeningCycle({ silent = false } = {}) {
   _screeningBusy = true; // set immediately — prevents TOCTOU race with concurrent callers
   _screeningLastTriggered = Date.now();
 
+  // Circuit breaker — pause deploy after 3 consecutive losses
+  const cb = getCircuitBreaker();
+  if (cb.paused) {
+    const remainingMin = Math.ceil(cb.remainingMs / 60000);
+    log("cron", `Screening skipped — circuit breaker active (${cb.lossStreak} loss streak, ${remainingMin}m remaining)`);
+    _screeningBusy = false;
+    return `⛔ SCREENING PAUSED — Circuit breaker active (${cb.lossStreak} consecutive losses). Resume in ~${remainingMin}m.`;
+  }
+
   // Hard guards — don't even run the agent if preconditions aren't met
   let prePositions, preBalance;
   let liveMessage = null;
@@ -582,8 +601,9 @@ STEPS:
 2. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
 3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
    bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*(${config.strategy.maxBinsBelow - config.strategy.minBinsBelow})) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
-   pass deploy_position.volatility = the candidate volatility value.
-   For single-side SOL deploys, do not invent upside:
+    The bot will auto-adjust bins_below based on Supertrend + RSI indicators (uptrend→narrower, overbought→wider).
+    pass deploy_position.volatility = the candidate volatility value.
+    For single-side SOL deploys, do not invent upside:
    set amount_y only, keep amount_x = 0, keep bins_above = 0, and let the upper bin stay at the active bin.
 4. Report in this exact format (no tables, no extra sections):
    🚀 DEPLOYED
@@ -1282,6 +1302,8 @@ function formatHelpText() {
     "/screen — refresh deterministic candidate list",
     "/candidates — show latest cached candidates",
     "/deploy <n> — deploy candidate by cached index",
+    "/scanhistory — scan all Meteora pools for closed positions",
+    "/pnl wallet [DDMMYY] — wallet PnL history table",
     "/briefing — morning briefing",
     "/hive — HiveMind sync status",
     "/hive pull — manual HiveMind pull now",
@@ -1343,7 +1365,7 @@ async function deployLatestCandidate(index) {
     }
   }
   const deployAmount = computeDeployAmount((await getWalletBalances()).sol);
-  const binsBelow = computeBinsBelow(candidate.volatility);
+  const binsBelow = await computeBinsBelow(candidate.volatility, candidate.base?.mint || candidate.base_mint || null);
   const result = await executeTool("deploy_position", {
     pool_address: candidate.pool,
     amount_y: deployAmount,
@@ -1573,6 +1595,50 @@ async function telegramHandler(msg) {
     return;
   }
 
+  if (text === "/scanhistory") {
+    try {
+      await sendMessage("Scanning wallet history from Meteora API...").catch(() => {});
+      const result = await scanWalletHistory();
+      if (result.error) { await sendMessage(`Error: ${result.error}`).catch(() => {}); return; }
+      await sendMessage(`Done: ${result.count} positions from ${result.pools} pools`).catch(() => {});
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  const pnlMatch = text.match(/^\/pnl\s+wallet(?:\s+(\d{6}))?$/i);
+  if (pnlMatch) {
+    try {
+      const filterDate = pnlMatch[1] || null;
+      const data = getWalletHistory(filterDate);
+      if (data.error) { await sendMessage(data.error).catch(() => {}); return; }
+      if (data.total === 0) { await sendMessage("No positions found.").catch(() => {}); return; }
+      const lines = data.positions.slice(0, 50).map(p => {
+        const closedAtDate = tsToDate(p.closedAt || p.createdAt);
+        const closedFmt = closedAtDate ? closedAtDate.toISOString().slice(0, 10) : "??";
+        const timeFmt = closedAtDate ? closedAtDate.toISOString().slice(11, 16) : "??";
+        const pool = (p.poolAddress || "?").slice(0, 8);
+        const pnl = parseFloat(p.pnlPctChange || 0);
+        const pnlUsd = parseFloat(p.pnlUsd || 0);
+        const pnlSol = parseFloat(p.pnlSol || 0);
+        const fees = parseFloat(p.allTimeFees?.total?.usd || p.allTimeFees?.usd || 0);
+        const createdDate = tsToDate(p.createdAt);
+        const durMs = closedAtDate && createdDate ? closedAtDate - createdDate : 0;
+        const durMin = Math.round(durMs / 60000);
+        const durStr = durMin < 60 ? `${durMin}m` : durMin < 1440 ? `${Math.floor(durMin/60)}j${durMin%60}m` : `${Math.floor(durMin/1440)}h${Math.floor((durMin%1440)/60)}j`;
+        const icon = pnl > 0 ? "✅" : "❌";
+        return `${closedFmt} ${timeFmt} | ${pool} | ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}% | $${pnlUsd.toFixed(2)} | ◎${pnlSol.toFixed(4)} | $${fees.toFixed(2)} | ${durStr} | ${icon}`;
+      });
+      const header = `📊 Wallet History (${data.total} positions):\n\nTgl/WIB | Pool | PnL% | $PnL | SOL | Fee$ | Dur |`;
+      const msg = [header, ...lines].join("\n");
+      await sendMessage(msg).catch(() => {});
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
   const deployMatch = text.match(/^\/deploy\s+(\d+)$/i);
   if (deployMatch) {
     try {
@@ -1712,14 +1778,66 @@ function getLoneCandidateSkipReason({ pool, sw, n, ti } = {}) {
   return null;
 }
 
-function computeBinsBelow(volatility) {
+async function computeBinsBelow(volatility, baseMint) {
   const parsedVolatility = Number(volatility);
   if (!Number.isFinite(parsedVolatility) || parsedVolatility <= 0) {
     throw new Error(`Invalid volatility ${volatility ?? "unknown"} — refusing volatility-scaled deploy.`);
   }
   const lo = config.strategy.minBinsBelow;
   const hi = config.strategy.maxBinsBelow;
-  return Math.max(lo, Math.min(hi, Math.round(lo + (parsedVolatility / 5) * (hi - lo))));
+  const baseBins = Math.max(lo, Math.min(hi, Math.round(lo + (parsedVolatility / 5) * (hi - lo))));
+
+  // Indicator-based bin adjustment (approach #2 — Supertrend + RSI proxy)
+  if (!baseMint) return baseBins;
+
+  try {
+    const url = `${config.api.url}/chart-indicators/${baseMint}?interval=5_MINUTE&candles=298`;
+    const res = await fetch(url, {
+      headers: { "Content-Type": "application/json", "x-api-key": config.api.publicApiKey },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return baseBins;
+    const data = await res.json();
+    const l = data?.latest;
+    if (!l) return baseBins;
+
+    const rsi = l?.rsi?.value;
+    const supertrendDir = l?.supertrend?.direction; // "bullish" | "bearish"
+    const price = Number(l?.candle?.close);
+
+    let factor = 1.0;
+    let regime = "SIDEWAYS";
+
+    if (supertrendDir === "bullish") {
+      if (rsi != null && rsi > 70) {
+        regime = "OVERBOUGHT_UPTREND";
+        factor = 1.3;
+      } else {
+        regime = "UPTREND";
+        factor = 0.8;
+      }
+    } else if (supertrendDir === "bearish") {
+      if (rsi != null && rsi < 30) {
+        regime = "OVERSOLD_DOWNTREND";
+        factor = 1.3;
+      } else {
+        regime = "DOWNTREND";
+        factor = 1.0;
+      }
+    } else {
+      regime = "SIDEWAYS";
+      factor = 1.1;
+    }
+
+    const adjustedBins = Math.max(lo, Math.min(hi, Math.round(baseBins * factor)));
+    if (adjustedBins !== baseBins) {
+      log("deploy_adjust", `Bins adjusted by indicator: ${baseBins} → ${adjustedBins} (${regime}, RSI=${rsi?.toFixed(1) || "?"}, Supertrend=${supertrendDir || "?"}, factor=${factor})`);
+    }
+    return adjustedBins;
+  } catch (e) {
+    log("deploy_adjust_warn", `Indicator adjustment failed for ${baseMint?.slice(0, 8)}: ${e.message} — using unadjusted bins`);
+    return baseBins;
+  }
 }
 
 // Register restarter — when update_config changes intervals, running cron jobs get replaced
@@ -1814,8 +1932,10 @@ Commands:
   auto           Let the agent pick and deploy automatically
   /status        Refresh wallet + positions
   /candidates    Refresh top pool list
-  /briefing      Show morning briefing (last 24h)
-  /learn         Study top LPers from the best current pool and save lessons
+   /briefing      Show morning briefing (last 24h)
+   /scanhistory   Scan all Meteora pools for closed positions
+   /pnl wallet [DDMMYY]  Wallet PnL history table
+   /learn         Study top LPers from the best current pool and save lessons
   /learn <addr>  Study top LPers from a specific pool address
   /thresholds    Show current screening thresholds + performance stats
   /evolve        Manually trigger threshold evolution from performance data
@@ -1891,6 +2011,49 @@ Commands:
       await runBusy(async () => {
         const briefing = await generateBriefing();
         console.log(`\n${briefing.replace(/<[^>]*>/g, "")}\n`);
+      });
+      return;
+    }
+
+    if (input === "/scanhistory") {
+      await runBusy(async () => {
+        console.log("\nScanning wallet history from Meteora API...\n");
+        const result = await scanWalletHistory();
+        if (result.error) { console.log(`Error: ${result.error}\n`); return; }
+        console.log(`Done: ${result.count} positions from ${result.pools} pools\n`);
+      });
+      return;
+    }
+
+    const pnlMatch = input.match(/^\/pnl\s+wallet(?:\s+(\d{6}))?$/i);
+    if (pnlMatch) {
+      await runBusy(async () => {
+        const filterDate = pnlMatch[1] || null;
+        const data = getWalletHistory(filterDate);
+        if (data.error) { console.log(`\n${data.error}\n`); return; }
+        if (data.total === 0) { console.log("\nNo positions found.\n"); return; }
+        const lines = data.positions.slice(0, 50).map(p => {
+          const closedAtDate = tsToDate(p.closedAt || p.createdAt);
+          const closedFmt = closedAtDate ? closedAtDate.toISOString().slice(0, 10) : "??";
+          const timeFmt = closedAtDate ? closedAtDate.toISOString().slice(11, 16) : "??";
+          const pool = (p.poolAddress || "?").slice(0, 8);
+          const pnl = parseFloat(p.pnlPctChange || 0);
+          const pnlUsd = parseFloat(p.pnlUsd || 0);
+          const pnlSol = parseFloat(p.pnlSol || 0);
+          const fees = parseFloat(p.allTimeFees?.total?.usd || p.allTimeFees?.usd || 0);
+          const createdDate = tsToDate(p.createdAt);
+          const durMs = closedAtDate && createdDate ? closedAtDate - createdDate : 0;
+          const durMin = Math.round(durMs / 60000);
+          const durStr = durMin < 60 ? `${durMin}m` : durMin < 1440 ? `${Math.floor(durMin/60)}j${durMin%60}m` : `${Math.floor(durMin/1440)}h${Math.floor((durMin%1440)/60)}j`;
+          const icon = pnl > 0 ? "✅" : "❌";
+          return `${closedFmt} ${timeFmt} | ${pool} | ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}% | $${pnlUsd.toFixed(2)} | ◎${pnlSol.toFixed(4)} | $${fees.toFixed(2)} | ${durStr} | ${icon}`;
+        });
+        console.log(`\nWallet History (${data.total} positions):`);
+        console.log("Tgl/WIB     | Pool     | PnL%    | $PnL    | SOL     | Fee$   | Dur    | ");
+        console.log("-".repeat(90));
+        lines.forEach(l => console.log(l));
+        if (data.total > 50) console.log(`... and ${data.total - 50} more`);
+        console.log();
       });
       return;
     }

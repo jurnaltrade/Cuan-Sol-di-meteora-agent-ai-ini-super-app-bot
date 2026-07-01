@@ -160,6 +160,17 @@ function getRawPoolScreeningRejectReason(pool, s) {
   if (volume == null || volume < s.minVolume) return `volume ${volume ?? "unknown"} below minVolume ${s.minVolume}`;
   if (tvl == null || tvl < s.minTvl) return `TVL ${tvl ?? "unknown"} below minTvl ${s.minTvl}`;
   if (s.maxTvl != null && tvl > s.maxTvl) return `TVL ${tvl} above maxTvl ${s.maxTvl}`;
+  if (s.minVolTvlRatio != null && volume != null && tvl != null && tvl > 0) {
+    const tfMatch = (s.timeframe || "30m").match(/^(\d+)([mh])$/);
+    let periodMin = 30;
+    if (tfMatch) { periodMin = parseInt(tfMatch[1]) * (tfMatch[2] === "h" ? 60 : 1); }
+    const periodsPerDay = 1440 / periodMin;
+    const dailyVolume = volume * periodsPerDay;
+    const volTvlRatio = (dailyVolume / tvl) * 100;
+    if (volTvlRatio < s.minVolTvlRatio) {
+      return `vol/TVL ${volTvlRatio.toFixed(1)}%/day below min ${s.minVolTvlRatio}%/day (daily vol ${Math.round(dailyVolume)} / TVL ${Math.round(tvl)})`;
+    }
+  }
   if (binStep == null || binStep < s.minBinStep) return `bin_step ${binStep ?? "unknown"} below minBinStep ${s.minBinStep}`;
   if (binStep > s.maxBinStep) return `bin_step ${binStep} above maxBinStep ${s.maxBinStep}`;
   if (feeActiveTvlRatio == null || feeActiveTvlRatio < s.minFeeActiveTvlRatio) {
