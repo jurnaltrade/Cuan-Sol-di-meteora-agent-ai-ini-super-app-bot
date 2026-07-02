@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Jakarta"
+    versioning-strategy: "increase"
+    open-pull-requests-limit: 10
+    groups:
+      production-deps:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      production-major:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+    ignore:
+      # Ignore @solana/web3.js major bumps — managed separately (SDK churn)
+      - dependency-name: "@solana/web3.js"
+        update-types: ["version-update:semver-major"]
