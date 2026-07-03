@@ -683,43 +683,52 @@ discord-listener/
 ---
 
 Rekap lengkap 7 fitur baru yang sudah dibuat dan di-wire ke Meridian:
+
 1. Volatility-Regime Adaptive Ranging
 📁 tools/volatility-regime.js
 Mengklasifikasi kondisi pasar pool jadi LOW/MEDIUM/HIGH/EXTREME berdasarkan realized volatility, lalu kasih rekomendasi lebar bin + strategy (spot/bid_ask/curve) + pengali ukuran posisi yang sesuai — bukan pakai bin width statis terus-menerus.
 ✅ Aktif otomatis, nol risiko eksekusi tambahan.
-2. Multi-Armed Bandit Capital Allocator
+
+3. Multi-Armed Bandit Capital Allocator
 📁 bandit-allocator.js
 Thompson Sampling di antara 4 strategy preset (conservative/balanced/aggressive/curve wide) — modal otomatis condong ke preset yang menang berdasarkan histori win-rate/PnL, bukan cuma satu strategy tetap.
 ✅ Aktif otomatis, murni logika lokal.
-3. Whale-Shadow Rebalancing
+
+4. Whale-Shadow Rebalancing
 📁 whale-shadow.js
 Pantau wallet smart-money yang di-track, deteksi kapan mereka exit/re-range/entry di pool yang sama dengan posisi Meridian — sinyal leading indicator sebelum harga bergerak.
 ✅ Aktif otomatis (butuh isi wallet lewat add_smart_wallet dulu biar berguna).
-4. Profit Insurance Buffer
+
+5. Profit Insurance Buffer
 📁 profit-insurance.js
 Otomatis sisihkan % dari setiap fee yang di-claim ke buffer cadangan terpisah — bisa dipakai nanti untuk nutup stop-loss.
 ✅ Aktif otomatis, mode tracking-only (aman, belum transfer dana beneran kecuali diaktifkan manual).
-5. Portfolio Greeks Aggregator
+
+6. Portfolio Greeks Aggregator
 📁 portfolio-greeks.js
 Hitung delta (arah eksposur) & gamma (risiko konsentrasi range sempit) dari SEMUA posisi aktif sekaligus, bukan per-posisi — kasih tahu kalau portofolio terlalu condong satu arah atau terlalu berisiko.
 ✅ Aktif otomatis, murni logika lokal.
-6. IL Hedge Overlay ⚠️ OFF by default
+
+7. IL Hedge Overlay ⚠️ OFF by default
 📁 tools/hedge-overlay.js
 Buka short kecil di perp DEX (Drift/Zeta/dst) untuk hedge exposure arah harga saat LP posisi dibuka, otomatis close bareng LP-nya.
 🔴 Butuh kamu isi manual koneksi ke SDK perp venue pilihan (_venue di file-nya) sebelum bisa jalan beneran — sengaja dikosongkan demi keamanan dana.
-7. JIT / Flow-Following Rapid Liquidity ⚠️ OFF by default
+
+8. JIT / Flow-Following Rapid Liquidity ⚠️ OFF by default
 📁 jit-liquidity.js
 Deteksi burst volume yang baru landing, deploy posisi sangat sempit buat nangkep fee dari continuation flow, auto-close cepat.
+
 🔴 Paling spekulatif — wajib backtest pakai DRY_RUN=true dulu, cek win rate via get_jit_summary() sebelum nyalain dengan dana asli.
 Yang menempel ke sistem (bukan modul baru, tapi jadi jembatan):
 config.js — 6 blok konfigurasi baru untuk semua fitur di atas
-tools/definitions.js — 13 tool baru yang bisa dipanggil LLM
+tools/definitions.js —
+
+13 tool baru yang bisa dipanggil LLM
 tools/executor.js — hook otomatis (hedge auto-buka/tutup, bandit record outcome, insurance skim dari claim fee)
 prompt.js — instruksi ke LLM kapan pakai tool-tool ini
+
 Status ringkas: 5 fitur aktif otomatis setelah upload+restart, 2 fitur (hedge & JIT) mati by default sampai kamu konfigurasi manual — sesuai urutan rollout yang aman di INTEGRATION.md
 
 ## Disclaimer
 
-This software is provided as-is, with no warranty. Running an autonomous trading agent carries real financial risk — you can lose funds. Always start with `DRY_RUN=true` to verify behavior before going live. Never deploy more capital than you can afford to lose. This is not financial advice.
-
-The authors are not responsible for any losses incurred through use of this software.
+Perangkat lunak ini disediakan apa adanya, tanpa jaminan apa pun. Menjalankan agen perdagangan otomatis mengandung risiko finansial nyata — Anda dapat kehilangan dana. Selalu mulai dengan `DRY_RUN=true` untuk memverifikasi perilakunya sebelum mulai beroperasi secara nyata (live). Jangan pernah menggunakan modal yang melebihi kemampuan finansial Anda untuk menanggung kerugian. Ini bukan merupakan saran keuangan. Pembuat perangkat lunak ini tidak bertanggung jawab atas kerugian apa pun yang timbul akibat penggunaan perangkat lunak ini.
